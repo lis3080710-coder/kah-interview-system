@@ -31,6 +31,27 @@ const MAX_SCORES = {
 const POSITIVE_TAGS = ["논리정연함", "자신감 있음", "준비 철저", "협업 마인드", "아이디어 우수", "높은 직무 이해도", "경청과 소통", "구체적 경험 제시", "성장 지향성"]
 const NEGATIVE_TAGS = ["소극적 태도", "동문서답", "근거 부족", "목소리 작음", "긴장함", "협업 우려", "방어적 태도"]
 
+// ─── Olympic Scoring Helper ────────────────────────────────────────────────────
+// When N >= 5: drop highest and lowest, average the rest.
+// Returns { score, isOlympic }
+function calcDisplayScore(evaluations) {
+  const n = evaluations.length
+  if (n === 0) return { score: 0, isOlympic: false }
+  const scores = evaluations.map(e => e.total_score || 0)
+  if (n >= 5) {
+    const sum = scores.reduce((a, b) => a + b, 0)
+    const max = Math.max(...scores)
+    const min = Math.min(...scores)
+    return { score: Math.round((sum - max - min) / (n - 2)), isOlympic: true }
+  }
+  return { score: Math.round(scores.reduce((a, b) => a + b, 0) / n), isOlympic: false }
+}
+
+// Convert raw score to 100-point scale
+function toHundred(score, maxTotal) {
+  return Math.round((score / maxTotal) * 100)
+}
+
 // ─── KAH Logo Component ───────────────────────────────────────────────────────
 const KAHLogo = () => (
   <div className="flex items-center gap-2">
@@ -207,7 +228,7 @@ function CompetencyRadar({ scores }) {
         <PolarAngleAxis dataKey="subject" tick={{ fontSize: 11, fill: "#64748b", fontWeight: 600 }} />
         <PolarRadiusAxis angle={90} domain={[0, 100]} tick={{ fontSize: 9, fill: "#94a3b8" }} tickCount={5} />
         <Radar name="역량" dataKey="value" stroke="#2563eb" fill="#3b82f6" fillOpacity={0.25} strokeWidth={2} dot={{ fill: "#2563eb", r: 3 }} />
-        <Tooltip formatter={(v) => `${v}%`} />
+        <Tooltip formatter={(v) => `${v}점`} />
       </RadarChart>
     </ResponsiveContainer>
   )
@@ -218,6 +239,8 @@ function EvaluationDetailsModal({ candidate, onClose, onUpdate }) {
   if (!candidate || !candidate.evaluations || candidate.evaluations.length === 0) return null
 
   const maxTotal = Object.values(MAX_SCORES).reduce((a, b) => a + b, 0)
+  const { score: displayScore, isOlympic } = calcDisplayScore(candidate.evaluations)
+  const n = candidate.evaluations.length
 
   const fieldNames = {
     sincerity: '성실성', cooperation: '협조성', planning: '계획성',
@@ -270,8 +293,16 @@ function EvaluationDetailsModal({ candidate, onClose, onUpdate }) {
               {candidate.name} - 평가 상세
             </h2>
             <p className="text-sm text-gray-500">
-              총 {candidate.evaluations.length}명의 면접관이 평가했습니다
+              총 {n}명의 면접관이 평가했습니다
             </p>
+            {isOlympic && (
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                  🏅 올림픽 스코어링 적용
+                </span>
+                <span className="text-[10px] text-gray-400">(최고·최저 제외, {n - 2}명 평균)</span>
+              </div>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -284,13 +315,13 @@ function EvaluationDetailsModal({ candidate, onClose, onUpdate }) {
         <div className="mb-6">
           <div className="bg-gradient-to-br from-[#1e3a5f] to-[#2563eb] rounded-xl p-4 text-white flex justify-between items-center">
             <div>
-              <div className="text-xs opacity-80 mb-1">평균 점수</div>
-              <div className="text-3xl font-black">{candidate.avg_score}</div>
+              <div className="text-xs opacity-80 mb-1">{isOlympic ? '올림픽 평균 점수' : '평균 점수'}</div>
+              <div className="text-3xl font-black">{displayScore}</div>
             </div>
             <div className="text-right">
               <div className="text-xs opacity-80">/ {maxTotal}점</div>
               <div className="text-2xl font-extrabold">
-                {Math.round((candidate.avg_score / maxTotal) * 100)}%
+                {toHundred(displayScore, maxTotal)}점
               </div>
             </div>
           </div>
@@ -498,24 +529,20 @@ export default function InterviewSystem() {
 
       if (evaluationsError) throw evaluationsError
 
-      // Calculate average scores for each candidate
+      // Calculate average scores for each candidate (with Olympic scoring when N >= 5)
       const candidatesWithScores = candidatesData.map(candidate => {
         const candidateEvaluations = evaluationsData.filter(
           e => e.candidate_id === candidate.id
         )
 
-        const avgScore = candidateEvaluations.length > 0
-          ? Math.round(
-              candidateEvaluations.reduce((sum, e) => sum + (e.total_score || 0), 0) / 
-              candidateEvaluations.length
-            )
-          : 0
+        const { score: avgScore, isOlympic } = calcDisplayScore(candidateEvaluations)
 
         return {
           ...candidate,
           evaluations: candidateEvaluations,
           avg_score: avgScore,
           evaluation_count: candidateEvaluations.length,
+          is_olympic: isOlympic,
         }
       })
 
@@ -809,12 +836,13 @@ export default function InterviewSystem() {
                   </div>
                   <div className="flex-1">
                     <div className="text-sm font-bold text-gray-800">{c.name}</div>
-                    <div className="text-xs text-gray-500">
+                    <div className="text-xs text-gray-500 flex items-center gap-1">
                       평균: {c.avg_score}점 ({c.evaluation_count}명)
+                      {c.is_olympic && <span className="text-[9px] font-bold text-amber-500 bg-amber-50 px-1 py-0.5 rounded">올림픽</span>}
                     </div>
                   </div>
                   <div className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
-                    {Math.round((c.avg_score / maxTotal) * 100)}%
+                    {toHundred(c.avg_score, maxTotal)}점
                   </div>
                   <button
                     onClick={(e) => {
@@ -972,7 +1000,7 @@ export default function InterviewSystem() {
                     </div>
                     <div className="text-right">
                       <div className="text-xs opacity-70">/ {maxTotal}점</div>
-                      <div className="text-2xl font-extrabold">{Math.round((total / maxTotal) * 100)}%</div>
+                      <div className="text-2xl font-extrabold">{toHundred(total, maxTotal)}점</div>
                       <div className="mt-1 h-1.5 w-24 bg-white/20 rounded-full overflow-hidden">
                         <div
                           style={{ width: `${(total / maxTotal) * 100}%` }}
