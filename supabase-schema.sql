@@ -119,7 +119,38 @@ FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
 
 -- ========================================
--- 6. ROW LEVEL SECURITY (RLS) POLICIES
+-- 6. APP SETTINGS TABLE
+-- Stores global app settings (eval categories, surprise topics, etc.)
+-- ========================================
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value JSONB NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Auto-update timestamp on change
+CREATE TRIGGER update_app_settings_updated_at
+BEFORE UPDATE ON app_settings
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+
+-- RLS for app_settings
+ALTER TABLE app_settings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Anyone can read app_settings"
+  ON app_settings FOR SELECT
+  USING (true);
+
+CREATE POLICY "Anyone can insert app_settings"
+  ON app_settings FOR INSERT
+  WITH CHECK (true);
+
+CREATE POLICY "Anyone can update app_settings"
+  ON app_settings FOR UPDATE
+  USING (true);
+
+-- ========================================
+-- 7. ROW LEVEL SECURITY (RLS) POLICIES
 -- Enable RLS for secure multi-user access
 -- ========================================
 
@@ -163,14 +194,14 @@ CREATE POLICY "Anyone can delete evaluations"
   USING (true);
 
 -- ========================================
--- 7. REALTIME PUBLICATION
+-- 8. REALTIME PUBLICATION
 -- Enable realtime subscriptions for live updates
 -- ========================================
 -- Note: Enable Realtime in Supabase Dashboard under Database > Publications
 -- or run: ALTER PUBLICATION supabase_realtime ADD TABLE evaluations, candidates;
 
 -- ========================================
--- 8. SAMPLE DATA (OPTIONAL - FOR TESTING)
+-- 9. SAMPLE DATA (OPTIONAL - FOR TESTING)
 -- ========================================
 -- Insert sample candidates
 INSERT INTO candidates (name, info) VALUES

@@ -1,13 +1,13 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from "react"
+import { useRouter } from "next/navigation"
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from "recharts"
 import { createClient } from '@supabase/supabase-js'
 
 // ─── Supabase Client ──────────────────────────────────────────────────────────
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
-
 const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 function getInterviewerId() {
@@ -21,19 +21,44 @@ function getInterviewerId() {
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const MAX_SCORES = {
-  sincerity: 3, cooperation: 3, planning: 3,
-  expression: 3, commonsense: 3,
-  proactivity: 3, personality: 3,
-  q1: 5, q2: 5, comprehension: 5, logic: 5, creativity: 5,
-}
+const DEFAULT_EVAL_CATEGORIES = [
+  { id: 'job', label: '직무적합도', items: [
+    { field: 'sincerity',    label: '성실성', max: 3 },
+    { field: 'cooperation',  label: '협조성', max: 3 },
+    { field: 'planning',     label: '계획성', max: 3 },
+  ]},
+  { id: 'communication', label: '의사소통', items: [
+    { field: 'expression',   label: '표현력', max: 3 },
+    { field: 'commonsense',  label: '상식성', max: 3 },
+  ]},
+  { id: 'personality_cat', label: '인성', items: [
+    { field: 'proactivity',  label: '적극성', max: 3 },
+    { field: 'personality',  label: '인성',   max: 3 },
+  ]},
+  { id: 'surprise_q', label: '돌발질문', items: [
+    { field: 'q1',           label: '내용 1', max: 5 },
+    { field: 'q2',           label: '내용 2', max: 5 },
+    { field: 'comprehension',label: '이해력', max: 5 },
+    { field: 'logic',        label: '논리력', max: 5 },
+    { field: 'creativity',   label: '창의력', max: 5 },
+  ]},
+]
+
+const DEFAULT_SURPRISE_TOPICS = [
+  { id: 1, text: '조직문화 적응' },
+  { id: 2, text: '갈등 해결 경험' },
+  { id: 3, text: '리더십 경험' },
+  { id: 4, text: '실패 경험과 극복' },
+  { id: 5, text: '지원 동기' },
+  { id: 6, text: '향후 목표' },
+  { id: 7, text: '팀워크 경험' },
+  { id: 8, text: '스트레스 관리' },
+]
 
 const POSITIVE_TAGS = ["논리정연함", "자신감 있음", "준비 철저", "협업 마인드", "아이디어 우수", "높은 직무 이해도", "경청과 소통", "구체적 경험 제시", "성장 지향성"]
 const NEGATIVE_TAGS = ["소극적 태도", "동문서답", "근거 부족", "목소리 작음", "긴장함", "협업 우려", "방어적 태도"]
 
 // ─── Olympic Scoring Helper ────────────────────────────────────────────────────
-// When N >= 5: drop highest and lowest, average the rest.
-// Returns { score, isOlympic }
 function calcDisplayScore(evaluations) {
   const n = evaluations.length
   if (n === 0) return { score: 0, isOlympic: false }
@@ -42,20 +67,40 @@ function calcDisplayScore(evaluations) {
     const sum = scores.reduce((a, b) => a + b, 0)
     const max = Math.max(...scores)
     const min = Math.min(...scores)
-    return { score: Math.round((sum - max - min) / (n - 2)), isOlympic: true }
+    return { score: parseFloat(((sum - max - min) / (n - 2)).toFixed(1)), isOlympic: true }
   }
-  return { score: Math.round(scores.reduce((a, b) => a + b, 0) / n), isOlympic: false }
+  return { score: parseFloat((scores.reduce((a, b) => a + b, 0) / n).toFixed(1)), isOlympic: false }
 }
 
-// Convert raw score to 100-point scale
 function toHundred(score, maxTotal) {
-  return Math.round((score / maxTotal) * 100)
+  return parseFloat(((score / maxTotal) * 100).toFixed(1))
+}
+
+// ─── Supabase Settings Helpers ────────────────────────────────────────────────
+async function loadSetting(key) {
+  try {
+    const { data, error } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', key)
+      .single()
+    if (error || !data) return null
+    return data.value
+  } catch { return null }
+}
+
+async function saveSetting(key, value) {
+  try {
+    await supabase
+      .from('app_settings')
+      .upsert({ key, value }, { onConflict: 'key' })
+  } catch { /* silent fail */ }
 }
 
 // ─── KAH Logo Component ───────────────────────────────────────────────────────
 const KAHLogo = () => (
   <div className="flex items-center gap-2">
-    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-[#1e3a5f] to-[#2563eb] flex items-center justify-center shadow-lg">
+    <div className="w-10 h-10 rounded-lg bg-[#800020] flex items-center justify-center shadow-lg">
       <span className="text-white font-black text-sm tracking-tight font-serif">KAH</span>
     </div>
     <div>
@@ -81,23 +126,16 @@ function fakeParsePDF(filename) {
 function ScoreInput({ label, field, scores, max, onChange }) {
   const pct = max > 0 ? scores[field] / max : 0
   const barColor = pct >= 0.8 ? "#22c55e" : pct >= 0.5 ? "#f59e0b" : "#ef4444"
-  
   return (
     <div className="flex items-center py-2.5 border-b border-gray-100 gap-3">
       <div className="flex-1 text-sm text-gray-700 font-medium">{label}</div>
       <div className="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden">
-        <div 
-          style={{ width: `${pct * 100}%`, backgroundColor: barColor }} 
-          className="h-full rounded-full transition-all duration-300"
-        />
+        <div style={{ width: `${pct * 100}%`, backgroundColor: barColor }} className="h-full rounded-full transition-all duration-300" />
       </div>
       <input
-        type="number"
-        min={0}
-        max={max}
-        value={scores[field] || 0}
+        type="number" min={0} max={max} value={scores[field] || 0}
         onChange={e => onChange(field, Math.min(max, Math.max(0, Number(e.target.value))))}
-        className="w-14 border-[1.5px] border-gray-200 rounded-lg px-2.5 py-1.5 text-sm text-center outline-none bg-gray-50 focus:border-blue-600 focus:bg-white"
+        className="w-14 border-[1.5px] border-gray-200 rounded-lg px-2.5 py-1.5 text-sm text-center outline-none bg-gray-50 focus:border-[#800020] focus:bg-white"
       />
       <span className="text-xs text-gray-400 min-w-[50px]">/ {max}점</span>
     </div>
@@ -122,11 +160,7 @@ function Timer() {
     if (running) {
       intervalRef.current = setInterval(() => {
         setRemaining(r => {
-          if (r <= 1) {
-            clearInterval(intervalRef.current)
-            setRunning(false)
-            return 0
-          }
+          if (r <= 1) { clearInterval(intervalRef.current); setRunning(false); return 0 }
           return r - 1
         })
       }, 1000)
@@ -134,76 +168,29 @@ function Timer() {
     return () => clearInterval(intervalRef.current)
   }, [running])
 
-  const start = () => {
-    if (remaining === null) setRemaining(minutes * 60 + seconds)
-    setRunning(true)
-  }
-  const pause = () => {
-    setRunning(false)
-    clearInterval(intervalRef.current)
-  }
-  const reset = () => {
-    setRunning(false)
-    clearInterval(intervalRef.current)
-    setRemaining(null)
-  }
+  const start = () => { if (remaining === null) setRemaining(minutes * 60 + seconds); setRunning(true) }
+  const pause = () => { setRunning(false); clearInterval(intervalRef.current) }
+  const reset = () => { setRunning(false); clearInterval(intervalRef.current); setRemaining(null) }
 
   return (
     <div className="flex items-center gap-4">
       <div className="text-xs font-semibold text-gray-500 tracking-wider">⏱ TIMER</div>
       {remaining === null ? (
         <div className="flex items-center gap-1">
-          <input
-            type="number"
-            min={0}
-            max={99}
-            value={minutes}
-            onChange={e => setMinutes(Number(e.target.value))}
-            className="w-12 border-[1.5px] border-gray-200 rounded-lg px-2 py-1 text-sm text-center outline-none bg-gray-50"
-          />
+          <input type="number" min={0} max={99} value={minutes} onChange={e => setMinutes(Number(e.target.value))} className="w-12 border-[1.5px] border-gray-200 rounded-lg px-2 py-1 text-sm text-center outline-none bg-gray-50" />
           <span className="text-gray-500">:</span>
-          <input
-            type="number"
-            min={0}
-            max={59}
-            value={seconds}
-            onChange={e => setSeconds(Number(e.target.value))}
-            className="w-12 border-[1.5px] border-gray-200 rounded-lg px-2 py-1 text-sm text-center outline-none bg-gray-50"
-          />
+          <input type="number" min={0} max={59} value={seconds} onChange={e => setSeconds(Number(e.target.value))} className="w-12 border-[1.5px] border-gray-200 rounded-lg px-2 py-1 text-sm text-center outline-none bg-gray-50" />
         </div>
       ) : (
-        <div
-          className={`text-2xl font-extrabold tracking-wider min-w-20 text-center ${
-            isDone ? 'text-green-500' : isWarning ? 'text-red-500' : 'text-[#1e3a5f]'
-          }`}
-          style={{ animation: isWarning && running ? 'pulse 1s infinite' : 'none' }}
-        >
+        <div className={`text-2xl font-extrabold tracking-wider min-w-20 text-center ${isDone ? 'text-green-500' : isWarning ? 'text-red-500' : 'text-[#1e3a5f]'}`}
+          style={{ animation: isWarning && running ? 'pulse 1s infinite' : 'none' }}>
           {String(displayMin).padStart(2, "0")}:{String(displaySec).padStart(2, "0")}
         </div>
       )}
       <div className="flex gap-1.5">
-        {!running && (
-          <button
-            onClick={start}
-            className="border-none rounded-lg px-3.5 py-1.5 text-xs font-bold cursor-pointer bg-green-500 text-white hover:bg-green-600 transition-colors"
-          >
-            ▶ Start
-          </button>
-        )}
-        {running && (
-          <button
-            onClick={pause}
-            className="border-none rounded-lg px-3.5 py-1.5 text-xs font-bold cursor-pointer bg-amber-500 text-white hover:bg-amber-600 transition-colors"
-          >
-            ⏸ Pause
-          </button>
-        )}
-        <button
-          onClick={reset}
-          className="border-none rounded-lg px-3.5 py-1.5 text-xs font-bold cursor-pointer bg-gray-400 text-white hover:bg-gray-500 transition-colors"
-        >
-          ↺ Reset
-        </button>
+        {!running && <button onClick={start} className="border-none rounded-lg px-3.5 py-1.5 text-xs font-bold cursor-pointer bg-green-500 text-white hover:bg-green-600 transition-colors">▶ Start</button>}
+        {running && <button onClick={pause} className="border-none rounded-lg px-3.5 py-1.5 text-xs font-bold cursor-pointer bg-amber-500 text-white hover:bg-amber-600 transition-colors">⏸ Pause</button>}
+        <button onClick={reset} className="border-none rounded-lg px-3.5 py-1.5 text-xs font-bold cursor-pointer bg-gray-400 text-white hover:bg-gray-500 transition-colors">↺ Reset</button>
       </div>
       {isDone && <span className="text-xs text-green-500 font-bold">✓ 완료!</span>}
     </div>
@@ -211,23 +198,19 @@ function Timer() {
 }
 
 // ─── Radar Chart Component ────────────────────────────────────────────────────
-function CompetencyRadar({ scores }) {
-  const data = [
-    { subject: "직무적합도", value: Math.round(((scores.sincerity + scores.cooperation + scores.planning) / 9) * 100) },
-    { subject: "의사소통", value: Math.round(((scores.expression + scores.commonsense) / 6) * 100) },
-    { subject: "인성", value: Math.round(((scores.proactivity + scores.personality) / 6) * 100) },
-    { subject: "이해력", value: Math.round((scores.comprehension / 5) * 100) },
-    { subject: "논리력", value: Math.round((scores.logic / 5) * 100) },
-    { subject: "창의력", value: Math.round((scores.creativity / 5) * 100) },
-  ]
-  
+function CompetencyRadar({ scores, evalCategories }) {
+  const data = evalCategories.map(cat => {
+    const catScore = cat.items.reduce((sum, item) => sum + (scores[item.field] || 0), 0)
+    const catMax   = cat.items.reduce((sum, item) => sum + item.max, 0)
+    return { subject: cat.label, value: catMax > 0 ? parseFloat(((catScore / catMax) * 100).toFixed(1)) : 0 }
+  })
   return (
     <ResponsiveContainer width="100%" height={260}>
       <RadarChart data={data}>
         <PolarGrid stroke="#e2e8f0" />
         <PolarAngleAxis dataKey="subject" tick={{ fontSize: 11, fill: "#64748b", fontWeight: 600 }} />
         <PolarRadiusAxis angle={90} domain={[0, 100]} tick={{ fontSize: 9, fill: "#94a3b8" }} tickCount={5} />
-        <Radar name="역량" dataKey="value" stroke="#2563eb" fill="#3b82f6" fillOpacity={0.25} strokeWidth={2} dot={{ fill: "#2563eb", r: 3 }} />
+        <Radar name="역량" dataKey="value" stroke="#800020" fill="#800020" fillOpacity={0.18} strokeWidth={2} dot={{ fill: "#800020", r: 3 }} />
         <Tooltip formatter={(v) => `${v}점`} />
       </RadarChart>
     </ResponsiveContainer>
@@ -235,113 +218,75 @@ function CompetencyRadar({ scores }) {
 }
 
 // ─── Evaluation Details Modal ─────────────────────────────────────────────────
-function EvaluationDetailsModal({ candidate, onClose, onUpdate }) {
+function EvaluationDetailsModal({ candidate, onClose, onUpdate, evalCategories }) {
   if (!candidate || !candidate.evaluations || candidate.evaluations.length === 0) return null
 
-  const maxTotal = Object.values(MAX_SCORES).reduce((a, b) => a + b, 0)
+  const maxTotal = evalCategories.reduce((sum, cat) => sum + cat.items.reduce((s, i) => s + i.max, 0), 0)
   const { score: displayScore, isOlympic } = calcDisplayScore(candidate.evaluations)
   const n = candidate.evaluations.length
 
-  const fieldNames = {
-    sincerity: '성실성', cooperation: '협조성', planning: '계획성',
-    expression: '표현력', commonsense: '상식성',
-    proactivity: '적극성', personality: '인성',
-    q1: '내용1', q2: '내용2',
-    comprehension: '이해력', logic: '논리력', creativity: '창의력'
-  }
+  const labelMap = {}
+  evalCategories.forEach(cat => cat.items.forEach(item => { labelMap[item.field] = item.label }))
 
   const handleInterviewerIdChange = async (evaluation, newId) => {
     if (!newId.trim() || newId === evaluation.interviewer_id) return
     try {
-      const { error } = await supabase
-        .from('evaluations')
-        .update({ interviewer_id: newId.trim() })
-        .eq('id', evaluation.id)
+      const { error } = await supabase.from('evaluations').update({ interviewer_id: newId.trim() }).eq('id', evaluation.id)
       if (error) throw error
       if (onUpdate) onUpdate()
-    } catch (err) {
-      console.error('Error updating interviewer_id:', err)
-    }
+    } catch (err) { console.error('Error updating interviewer_id:', err) }
   }
 
   const handleDeleteEvaluation = async (evaluation) => {
     if (!confirm(`면접관 "${evaluation.interviewer_id}"의 평가를 삭제하시겠습니까?`)) return
     try {
-      const { error } = await supabase
-        .from('evaluations')
-        .delete()
-        .eq('id', evaluation.id)
+      const { error } = await supabase.from('evaluations').delete().eq('id', evaluation.id)
       if (error) throw error
       if (onUpdate) onUpdate()
-    } catch (err) {
-      console.error('Error deleting evaluation:', err)
-    }
+    } catch (err) { console.error('Error deleting evaluation:', err) }
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 z-[1000] flex items-center justify-center p-5"
-      onClick={onClose}
-    >
-      <div
-        className="bg-white rounded-2xl p-8 max-w-2xl w-full max-h-[80vh] overflow-y-auto shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
+    <div className="fixed inset-0 bg-black/50 z-[1000] flex items-center justify-center p-5" onClick={onClose}>
+      <div className="bg-white rounded-2xl p-8 max-w-2xl w-full max-h-[80vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-6">
           <div>
-            <h2 className="text-xl font-extrabold text-[#1e3a5f] mb-1">
-              {candidate.name} - 평가 상세
-            </h2>
-            <p className="text-sm text-gray-500">
-              총 {n}명의 면접관이 평가했습니다
-            </p>
+            <h2 className="text-xl font-extrabold text-[#1e3a5f] mb-1">{candidate.name} - 평가 상세</h2>
+            <p className="text-sm text-gray-500">총 {n}명의 면접관이 평가했습니다</p>
             {isOlympic && (
               <div className="flex items-center gap-1.5 mt-1">
-                <span className="text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                  🏅 올림픽 스코어링 적용
-                </span>
+                <span className="text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">🏅 올림픽 스코어링 적용</span>
                 <span className="text-[10px] text-gray-400">(최고·최저 제외, {n - 2}명 평균)</span>
               </div>
             )}
           </div>
-          <button
-            onClick={onClose}
-            className="border-none bg-gray-100 rounded-lg w-8 h-8 cursor-pointer text-lg text-gray-500 hover:bg-gray-200"
-          >
-            ×
-          </button>
+          <button onClick={onClose} className="border-none bg-gray-100 rounded-lg w-8 h-8 cursor-pointer text-lg text-gray-500 hover:bg-gray-200">×</button>
         </div>
 
         <div className="mb-6">
-          <div className="bg-gradient-to-br from-[#1e3a5f] to-[#2563eb] rounded-xl p-4 text-white flex justify-between items-center">
+          <div className="bg-[#800020] rounded-xl p-4 text-white flex justify-between items-center">
             <div>
               <div className="text-xs opacity-80 mb-1">{isOlympic ? '올림픽 평균 점수' : '평균 점수'}</div>
-              <div className="text-3xl font-black">{displayScore}</div>
+              <div className="text-3xl font-black">{Number(displayScore).toFixed(1)}</div>
             </div>
             <div className="text-right">
               <div className="text-xs opacity-80">/ {maxTotal}점</div>
-              <div className="text-2xl font-extrabold">
-                {toHundred(displayScore, maxTotal)}점
-              </div>
+              <div className="text-2xl font-extrabold">{toHundred(displayScore, maxTotal)}점</div>
             </div>
           </div>
         </div>
 
-        <div className="text-sm font-bold text-gray-500 mb-3 uppercase tracking-wider">
-          개별 평가 내역
-        </div>
+        <div className="text-sm font-bold text-gray-500 mb-3 uppercase tracking-wider">개별 평가 내역</div>
 
         {candidate.evaluations.map((evaluation, idx) => (
           <div key={idx} className="bg-gray-50 rounded-xl p-4 mb-3 border border-gray-200">
             <div className="flex justify-between items-center mb-3">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
-                  {idx + 1}
-                </div>
+                <div className="w-8 h-8 rounded-lg bg-[#800020] text-white flex items-center justify-center text-xs font-bold">{idx + 1}</div>
                 <div>
                   <div className="text-xs text-gray-400 font-semibold mb-0.5">면접관 ID</div>
                   <input
-                    className="text-xs text-[#1e3a5f] font-semibold font-mono border-[1.5px] border-gray-200 rounded-md px-2 py-1 bg-white outline-none focus:border-blue-500 w-44"
+                    className="text-xs text-[#1e3a5f] font-semibold font-mono border-[1.5px] border-gray-200 rounded-md px-2 py-1 bg-white outline-none focus:border-[#800020] w-44"
                     defaultValue={evaluation.interviewer_id}
                     onBlur={e => handleInterviewerIdChange(evaluation, e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
@@ -349,54 +294,32 @@ function EvaluationDetailsModal({ candidate, onClose, onUpdate }) {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <div className="text-xl font-extrabold text-blue-600">
-                  {evaluation.total_score}점
-                </div>
-                <button
-                  onClick={() => handleDeleteEvaluation(evaluation)}
-                  className="border-none bg-red-50 text-red-500 text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold hover:bg-red-500 hover:text-white transition-colors"
-                  title="이 평가 삭제"
-                >
-                  삭제
-                </button>
+                <div className="text-xl font-extrabold text-[#800020]">{Number(evaluation.total_score).toFixed(1)}점</div>
+                <button onClick={() => handleDeleteEvaluation(evaluation)} className="border-none bg-red-50 text-red-500 text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold hover:bg-red-500 hover:text-white transition-colors">삭제</button>
               </div>
             </div>
-
             <div className="grid grid-cols-3 gap-2 mb-3">
               {Object.entries(evaluation.scores).map(([key, value]) => (
                 <div key={key} className="bg-white rounded-md px-2.5 py-1.5 flex justify-between items-center">
-                  <span className="text-xs text-gray-500 font-semibold">
-                    {fieldNames[key] || key}
-                  </span>
+                  <span className="text-xs text-gray-500 font-semibold">{labelMap[key] || key}</span>
                   <span className="text-xs text-[#1e3a5f] font-bold">{value}</span>
                 </div>
               ))}
             </div>
-
             {evaluation.tags && evaluation.tags.length > 0 && (
               <div className="mb-2">
                 <div className="text-xs text-gray-400 mb-1 font-semibold">태그</div>
                 <div className="flex flex-wrap gap-1.5">
                   {evaluation.tags.map((tag, i) => (
-                    <span
-                      key={i}
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
-                        tag.type === 'positive' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-                      }`}
-                    >
-                      {tag.text}
-                    </span>
+                    <span key={i} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${tag.type === 'positive' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'}`}>{tag.text}</span>
                   ))}
                 </div>
               </div>
             )}
-
             {evaluation.note && (
               <div>
                 <div className="text-xs text-gray-400 mb-1 font-semibold">메모</div>
-                <div className="text-xs text-gray-600 leading-relaxed bg-white p-2 rounded-md">
-                  {evaluation.note}
-                </div>
+                <div className="text-xs text-gray-600 leading-relaxed bg-white p-2 rounded-md">{evaluation.note}</div>
               </div>
             )}
           </div>
@@ -408,7 +331,9 @@ function EvaluationDetailsModal({ candidate, onClose, onUpdate }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function InterviewSystem() {
-  // State management
+  const router = useRouter()
+
+  // ── 기본 상태 ─────────────────────────────────────────────────────────────
   const [selectedCandidateId, setSelectedCandidateId] = useState(null)
   const [currentCandidate, setCurrentCandidate] = useState(null)
   const [currentScores, setCurrentScores] = useState({
@@ -429,126 +354,216 @@ export default function InterviewSystem() {
   const [toast, setToast] = useState(null)
   const fileRef = useRef()
 
-  // Show toast message
+  // ── 평가항목 편집 상태 ────────────────────────────────────────────────────
+  const [evalCategories, setEvalCategories] = useState(() => {
+    try {
+      const saved = localStorage.getItem('kah_eval_categories')
+      return saved ? JSON.parse(saved) : DEFAULT_EVAL_CATEGORIES
+    } catch { return DEFAULT_EVAL_CATEGORIES }
+  })
+  const [isEditingEval, setIsEditingEval] = useState(false)
+  const [editEvalTemp, setEditEvalTemp] = useState(null)
+  const [evalSaving, setEvalSaving] = useState(false)
+
+  // ── 돌발 질문 주제 상태 ───────────────────────────────────────────────────
+  const [surpriseTopicsOpen, setSurpriseTopicsOpen] = useState(false)
+  const [surpriseTopics, setSurpriseTopics] = useState(() => {
+    try {
+      const saved = localStorage.getItem('kah_surprise_topics')
+      return saved ? JSON.parse(saved) : DEFAULT_SURPRISE_TOPICS
+    } catch { return DEFAULT_SURPRISE_TOPICS }
+  })
+  const [selectedSurpriseTopics, setSelectedSurpriseTopics] = useState([])
+  const [isEditingSurpriseTopics, setIsEditingSurpriseTopics] = useState(false)
+  const [isAddingSurpriseTopic, setIsAddingSurpriseTopic] = useState(false)
+  const [newSurpriseTopicText, setNewSurpriseTopicText] = useState('')
+  const [editingSurpriseTopicId, setEditingSurpriseTopicId] = useState(null)
+  const [editingSurpriseTopicText, setEditingSurpriseTopicText] = useState('')
+
+  // ── Toast ──────────────────────────────────────────────────────────────────
   const showToast = (message, type = 'success') => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 3000)
   }
 
-  const updateScore = (field, value) => {
-    setCurrentScores(prev => ({ ...prev, [field]: value }))
+  // ── 점수 계산 ──────────────────────────────────────────────────────────────
+  const dynamicMaxScores = {}
+  evalCategories.forEach(cat => cat.items.forEach(item => { dynamicMaxScores[item.field] = item.max }))
+
+  const total = Object.entries(currentScores).reduce((sum, [, v]) => sum + (Number(v) || 0), 0)
+  const maxTotal = Object.values(dynamicMaxScores).reduce((a, b) => a + b, 0)
+
+  // ── 설정 영속성 ───────────────────────────────────────────────────────────
+  const persistEvalCategories = async (cats) => {
+    localStorage.setItem('kah_eval_categories', JSON.stringify(cats))
+    await saveSetting('eval_categories', cats)
   }
+
+  const persistSurpriseTopics = async (topics) => {
+    localStorage.setItem('kah_surprise_topics', JSON.stringify(topics))
+    await saveSetting('surprise_topics', topics)
+  }
+
+  // 앱 시작 시 Supabase에서 최신 설정 로드
+  useEffect(() => {
+    const loadSettings = async () => {
+      const remoteCategories = await loadSetting('eval_categories')
+      if (remoteCategories) {
+        setEvalCategories(remoteCategories)
+        localStorage.setItem('kah_eval_categories', JSON.stringify(remoteCategories))
+      }
+      const remoteTopics = await loadSetting('surprise_topics')
+      if (remoteTopics) {
+        setSurpriseTopics(remoteTopics)
+        localStorage.setItem('kah_surprise_topics', JSON.stringify(remoteTopics))
+      }
+    }
+    loadSettings()
+  }, [])
+
+  // ── 평가항목 편집 핸들러 ──────────────────────────────────────────────────
+  const startEvalEdit = () => {
+    setEditEvalTemp(JSON.parse(JSON.stringify(evalCategories)))
+    setIsEditingEval(true)
+  }
+
+  const cancelEvalEdit = () => {
+    setEditEvalTemp(null)
+    setIsEditingEval(false)
+  }
+
+  const saveEvalEdit = async () => {
+    setEvalSaving(true)
+    setEvalCategories(editEvalTemp)
+    await persistEvalCategories(editEvalTemp)
+    setEditEvalTemp(null)
+    setIsEditingEval(false)
+    setEvalSaving(false)
+    showToast('✅ 평가항목이 저장되었습니다.')
+  }
+
+  const updateEditTempCatLabel = (catId, value) => {
+    setEditEvalTemp(prev => prev.map(cat => cat.id === catId ? { ...cat, label: value } : cat))
+  }
+
+  const updateEditTempItemLabel = (catId, field, value) => {
+    setEditEvalTemp(prev => prev.map(cat =>
+      cat.id === catId
+        ? { ...cat, items: cat.items.map(item => item.field === field ? { ...item, label: value } : item) }
+        : cat
+    ))
+  }
+
+  const updateEditTempItemMax = (catId, field, value) => {
+    setEditEvalTemp(prev => prev.map(cat =>
+      cat.id === catId
+        ? { ...cat, items: cat.items.map(item => item.field === field ? { ...item, max: Math.max(1, value) } : item) }
+        : cat
+    ))
+  }
+
+  // ── 돌발 질문 핸들러 ──────────────────────────────────────────────────────
+  const toggleSurpriseTopic = async (id) => {
+    const next = selectedSurpriseTopics.includes(id)
+      ? selectedSurpriseTopics.filter(x => x !== id)
+      : [...selectedSurpriseTopics, id]
+    setSelectedSurpriseTopics(next)
+
+    if (currentCandidate && !currentCandidate.id.toString().startsWith('temp_')) {
+      const updatedInfo = { ...currentCandidate.info, surpriseTopics: next }
+      setCurrentCandidate(prev => ({ ...prev, info: updatedInfo }))
+      try {
+        await supabase.from('candidates').update({ info: updatedInfo }).eq('id', currentCandidate.id)
+      } catch (e) { console.error('surprise topic save error', e) }
+    }
+  }
+
+  const addSurpriseTopic = async () => {
+    if (!newSurpriseTopicText.trim()) return
+    const updated = [...surpriseTopics, { id: Date.now(), text: newSurpriseTopicText.trim() }]
+    setSurpriseTopics(updated)
+    await persistSurpriseTopics(updated)
+    setNewSurpriseTopicText('')
+    setIsAddingSurpriseTopic(false)
+  }
+
+  const saveSurpriseTopicEdit = async (id) => {
+    if (!editingSurpriseTopicText.trim()) return
+    const updated = surpriseTopics.map(t => t.id === id ? { ...t, text: editingSurpriseTopicText.trim() } : t)
+    setSurpriseTopics(updated)
+    await persistSurpriseTopics(updated)
+    setEditingSurpriseTopicId(null)
+    setEditingSurpriseTopicText('')
+  }
+
+  const deleteSurpriseTopic = async (id) => {
+    const updated = surpriseTopics.filter(t => t.id !== id)
+    setSurpriseTopics(updated)
+    await persistSurpriseTopics(updated)
+    setSelectedSurpriseTopics(prev => prev.filter(x => x !== id))
+  }
+
+  // ── 기타 핸들러 ───────────────────────────────────────────────────────────
+  const updateScore = (field, value) => setCurrentScores(prev => ({ ...prev, [field]: value }))
 
   const toggleTag = (text, type) => {
     setCurrentTags(prev => {
       const exists = prev.find(t => t.text === text)
-      if (exists) {
-        return prev.filter(t => t.text !== text)
-      }
-      return [...prev, { text, type }]
+      return exists ? prev.filter(t => t.text !== text) : [...prev, { text, type }]
     })
   }
 
   const resetCurrentEvaluation = () => {
     setCurrentCandidate(null)
-    setCurrentScores({
-      sincerity: 0, cooperation: 0, planning: 0,
-      expression: 0, commonsense: 0,
-      proactivity: 0, personality: 0,
-      q1: 0, q2: 0, comprehension: 0, logic: 0, creativity: 0,
-    })
+    setCurrentScores({ sincerity: 0, cooperation: 0, planning: 0, expression: 0, commonsense: 0, proactivity: 0, personality: 0, q1: 0, q2: 0, comprehension: 0, logic: 0, creativity: 0 })
     setCurrentTags([])
     setCurrentNote('')
     setSelectedCandidateId(null)
+    setSelectedSurpriseTopics([])
   }
 
   const loadEvaluationForCandidate = (candidateId, evalInterviewerId) => {
     const candidate = candidates.find(c => c.id === candidateId)
-    if (!candidate) {
-      console.error('Candidate not found:', candidateId)
-      return
-    }
+    if (!candidate) return
 
-    const myEvaluation = candidate.evaluations?.find(
-      e => e.interviewer_id === evalInterviewerId
-    )
+    const myEvaluation = candidate.evaluations?.find(e => e.interviewer_id === evalInterviewerId)
+    const defaultScores = { sincerity: 0, cooperation: 0, planning: 0, expression: 0, commonsense: 0, proactivity: 0, personality: 0, q1: 0, q2: 0, comprehension: 0, logic: 0, creativity: 0 }
 
-    const defaultScores = {
-      sincerity: 0, cooperation: 0, planning: 0,
-      expression: 0, commonsense: 0,
-      proactivity: 0, personality: 0,
-      q1: 0, q2: 0, comprehension: 0, logic: 0, creativity: 0,
-    }
+    // 저장된 돌발 질문 선택 복원
+    setSelectedSurpriseTopics(candidate.info?.surpriseTopics || [])
 
+    setSelectedCandidateId(candidateId)
+    setCurrentCandidate(candidate)
     if (myEvaluation) {
-      setSelectedCandidateId(candidateId)
-      setCurrentCandidate(candidate)
       setCurrentScores(myEvaluation.scores || defaultScores)
       setCurrentTags(myEvaluation.tags || [])
       setCurrentNote(myEvaluation.note || '')
     } else {
-      setSelectedCandidateId(candidateId)
-      setCurrentCandidate(candidate)
       setCurrentScores(defaultScores)
       setCurrentTags([])
       setCurrentNote('')
     }
   }
 
-  // Calculate total
-  const total = Object.entries(currentScores).reduce((sum, [k, v]) => sum + (Number(v) || 0), 0)
-  const maxTotal = Object.values(MAX_SCORES).reduce((a, b) => a + b, 0)
+  useEffect(() => { setInterviewerId(getInterviewerId()) }, [])
+  useEffect(() => { fetchCandidates() }, [])
 
-  // Initialize interviewer ID
-  useEffect(() => {
-    const id = getInterviewerId()
-    setInterviewerId(id)
-  }, [])
-
-  // Fetch candidates on mount
-  useEffect(() => {
-    fetchCandidates()
-  }, [])
-
-  // Fetch all candidates with rankings
   const fetchCandidates = async () => {
     try {
       setLoading(true)
-      
-      const { data: candidatesData, error: candidatesError } = await supabase
-        .from('candidates')
-        .select('*')
-        .order('created_at', { ascending: false })
-
+      const { data: candidatesData, error: candidatesError } = await supabase.from('candidates').select('*').order('created_at', { ascending: false })
       if (candidatesError) throw candidatesError
 
-      const { data: evaluationsData, error: evaluationsError } = await supabase
-        .from('evaluations')
-        .select('*')
-        .order('created_at', { ascending: false })
-
+      const { data: evaluationsData, error: evaluationsError } = await supabase.from('evaluations').select('*').order('created_at', { ascending: false })
       if (evaluationsError) throw evaluationsError
 
-      // Calculate average scores for each candidate (with Olympic scoring when N >= 5)
       const candidatesWithScores = candidatesData.map(candidate => {
-        const candidateEvaluations = evaluationsData.filter(
-          e => e.candidate_id === candidate.id
-        )
-
+        const candidateEvaluations = evaluationsData.filter(e => e.candidate_id === candidate.id)
         const { score: avgScore, isOlympic } = calcDisplayScore(candidateEvaluations)
-
-        return {
-          ...candidate,
-          evaluations: candidateEvaluations,
-          avg_score: avgScore,
-          evaluation_count: candidateEvaluations.length,
-          is_olympic: isOlympic,
-        }
+        return { ...candidate, evaluations: candidateEvaluations, avg_score: avgScore, evaluation_count: candidateEvaluations.length, is_olympic: isOlympic }
       })
 
-      // Sort by average score descending
       candidatesWithScores.sort((a, b) => b.avg_score - a.avg_score)
-
       setCandidates(candidatesWithScores)
     } catch (error) {
       console.error('Error fetching candidates:', error)
@@ -559,63 +574,39 @@ export default function InterviewSystem() {
   }
 
   const handleCandidateClick = (candidate) => {
-    if (!interviewerId) {
-      showToast('면접관 ID가 설정되지 않았습니다.', 'error')
-      return
-    }
+    if (!interviewerId) { showToast('면접관 ID가 설정되지 않았습니다.', 'error'); return }
     loadEvaluationForCandidate(candidate.id, interviewerId)
   }
 
   const saveEvaluation = async () => {
-    console.log('Save evaluation called')
-    
-    if (!currentCandidate || !interviewerId) {
-      showToast('지원자를 선택해주세요.', 'error')
-      return
-    }
-
-    if (!currentCandidate.name || !currentCandidate.name.trim()) {
-      showToast('지원자 이름을 입력해주세요.', 'error')
-      return
-    }
+    if (!currentCandidate || !interviewerId) { showToast('지원자를 선택해주세요.', 'error'); return }
+    if (!currentCandidate.name?.trim()) { showToast('지원자 이름을 입력해주세요.', 'error'); return }
 
     try {
       setSaving(true)
-
       let candidateId = currentCandidate.id
+      const infoWithSurprise = { ...currentCandidate.info, surpriseTopics: selectedSurpriseTopics }
 
-      // If this is a temp candidate, create it first
       if (currentCandidate.id.toString().startsWith('temp_')) {
         const { data: newCandidate, error: createError } = await supabase
-          .from('candidates')
-          .insert({
-            name: currentCandidate.name,
-            info: currentCandidate.info,
-          })
-          .select()
-          .single()
-
+          .from('candidates').insert({ name: currentCandidate.name, info: infoWithSurprise }).select().single()
         if (createError) throw createError
         candidateId = newCandidate.id
-
-        // Update current candidate with real ID
-        setCurrentCandidate({ ...currentCandidate, id: candidateId })
+        setCurrentCandidate({ ...currentCandidate, id: candidateId, info: infoWithSurprise })
         setSelectedCandidateId(candidateId)
+      } else {
+        await supabase.from('candidates').update({ info: infoWithSurprise }).eq('id', candidateId)
+        setCurrentCandidate(prev => ({ ...prev, info: infoWithSurprise }))
       }
 
-      // Now save the evaluation
-      const { error } = await supabase
-        .from('evaluations')
-        .upsert({
-          candidate_id: candidateId,
-          interviewer_id: interviewerId,
-          scores: currentScores,
-          total_score: total,
-          tags: currentTags,
-          note: currentNote,
-        }, {
-          onConflict: 'candidate_id,interviewer_id'
-        })
+      const { error } = await supabase.from('evaluations').upsert({
+        candidate_id: candidateId,
+        interviewer_id: interviewerId,
+        scores: currentScores,
+        total_score: total,
+        tags: currentTags,
+        note: currentNote,
+      }, { onConflict: 'candidate_id,interviewer_id' })
 
       if (error) throw error
 
@@ -631,23 +622,10 @@ export default function InterviewSystem() {
 
   const createCandidate = async (candidateInfo) => {
     try {
-      const { data, error } = await supabase
-        .from('candidates')
-        .insert({
-          name: candidateInfo.name,
-          info: candidateInfo,
-        })
-        .select()
-        .single()
-
+      const { data, error } = await supabase.from('candidates').insert({ name: candidateInfo.name, info: candidateInfo }).select().single()
       if (error) throw error
-
       await fetchCandidates()
-      
-      if (data && interviewerId) {
-        loadEvaluationForCandidate(data.id, interviewerId)
-      }
-
+      if (data && interviewerId) loadEvaluationForCandidate(data.id, interviewerId)
       return data
     } catch (error) {
       console.error('Error creating candidate:', error)
@@ -656,13 +634,11 @@ export default function InterviewSystem() {
     }
   }
 
-  // PDF Drop handler
   const handleDrop = useCallback((e) => {
     e.preventDefault()
     setDragging(false)
     const file = e.dataTransfer?.files?.[0] || e.target.files?.[0]
     if (!file) return
-    
     setParseMsg("📄 PDF 파싱 중...")
     setTimeout(async () => {
       const parsed = fakeParsePDF(file.name)
@@ -671,22 +647,14 @@ export default function InterviewSystem() {
     }, 1200)
   }, [interviewerId])
 
-  // New candidate button
   const newCandidate = () => {
     resetCurrentEvaluation()
     setParseMsg("")
-    // Create a temporary new candidate object for editing
     const tempCandidate = {
       id: 'temp_' + Date.now(),
       name: '',
-      info: {
-        dob: '', available12: '', phone: '', email: '',
-        studentId: '', address: '', major: '', grade: '',
-        career: '', schedule: ''
-      },
-      evaluations: [],
-      avg_score: 0,
-      evaluation_count: 0
+      info: { dob: '', available12: '', phone: '', email: '', studentId: '', address: '', major: '', grade: '', career: '', schedule: '' },
+      evaluations: [], avg_score: 0, evaluation_count: 0
     }
     setCurrentCandidate(tempCandidate)
     setSelectedCandidateId(tempCandidate.id)
@@ -695,18 +663,10 @@ export default function InterviewSystem() {
   const deleteCandidate = async (candidateId) => {
     if (!confirm('이 지원자를 삭제하시겠습니까? 모든 평가 데이터가 함께 삭제됩니다.')) return
     try {
-      const { error: evalError } = await supabase
-        .from('evaluations')
-        .delete()
-        .eq('candidate_id', candidateId)
+      const { error: evalError } = await supabase.from('evaluations').delete().eq('candidate_id', candidateId)
       if (evalError) throw evalError
-
-      const { error: candError } = await supabase
-        .from('candidates')
-        .delete()
-        .eq('id', candidateId)
+      const { error: candError } = await supabase.from('candidates').delete().eq('id', candidateId)
       if (candError) throw candError
-
       if (selectedCandidateId === candidateId) resetCurrentEvaluation()
       showToast('지원자가 삭제되었습니다.', 'success')
       await fetchCandidates()
@@ -718,41 +678,24 @@ export default function InterviewSystem() {
 
   const updateCandidateInfo = async (field, value) => {
     if (!currentCandidate) return
-
     const updatedInfo = { ...currentCandidate.info, [field]: value }
     const updatedName = field === 'name' ? value : currentCandidate.name
-    
-    // Update local state immediately
-    setCurrentCandidate({
-      ...currentCandidate,
-      name: updatedName,
-      info: updatedInfo,
-    })
-
-    // Only sync to DB if it's not a temp candidate
+    setCurrentCandidate({ ...currentCandidate, name: updatedName, info: updatedInfo })
     if (!currentCandidate.id.toString().startsWith('temp_')) {
       try {
-        const { error } = await supabase
-          .from('candidates')
-          .update({ name: updatedName, info: updatedInfo })
-          .eq('id', currentCandidate.id)
-
+        const { error } = await supabase.from('candidates').update({ name: updatedName, info: updatedInfo }).eq('id', currentCandidate.id)
         if (error) throw error
-      } catch (error) {
-        console.error('Error updating candidate:', error)
-      }
+      } catch (error) { console.error('Error updating candidate:', error) }
     }
   }
 
-  // Input field renderer
   const inputField = (label, field, span = false) => {
     const value = field === 'name' ? currentCandidate?.name : currentCandidate?.info?.[field]
-
     return (
       <div className={`flex flex-col gap-1 flex-1 ${span ? 'min-w-full' : 'min-w-[140px]'}`}>
         <label className="text-xs font-semibold text-gray-400 tracking-wide">{label}</label>
         <input
-          className="border-[1.5px] border-gray-200 rounded-lg px-3 py-2 text-sm outline-none text-gray-800 transition-colors bg-gray-50 w-full focus:border-blue-600 focus:bg-white"
+          className="border-[1.5px] border-gray-200 rounded-lg px-3 py-2 text-sm outline-none text-gray-800 transition-colors bg-gray-50 w-full focus:border-[#800020] focus:bg-white"
           value={value || ""}
           onChange={e => updateCandidateInfo(field, e.target.value)}
           placeholder={label}
@@ -762,6 +705,8 @@ export default function InterviewSystem() {
     )
   }
 
+  const displayCategories = isEditingEval ? editEvalTemp : evalCategories
+
   return (
     <div className="font-sans bg-gray-50 min-h-screen text-gray-800">
       {/* ── STICKY HEADER ─────────────────────────────────────────── */}
@@ -769,25 +714,16 @@ export default function InterviewSystem() {
         <KAHLogo />
         <Timer />
         <div className="flex gap-2 items-center">
-          {interviewerId && (
-            <div className="text-xs text-gray-400 mr-2">
-              ID: {interviewerId.slice(-8)}
-            </div>
-          )}
-          <button
-            onClick={newCandidate}
-            className="border-none rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer bg-white border-[1.5px] border-gray-200 text-gray-600 hover:border-blue-600 hover:text-blue-600 transition-colors"
-          >
+          {interviewerId && <div className="text-xs text-gray-400 mr-2">ID: {interviewerId.slice(-8)}</div>}
+          <button onClick={newCandidate} className="border-[1.5px] border-gray-200 rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer bg-white text-gray-600 hover:border-[#800020] hover:text-[#800020] transition-colors">
             + 신규 지원자
           </button>
-          <button
-            onClick={() => {
-              console.log('Button clicked!')
-              saveEvaluation()
-            }}
-            className="border-none rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer bg-gradient-to-br from-[#1e3a5f] to-[#2563eb] text-white shadow-md hover:opacity-90 hover:-translate-y-0.5 transition-all"
-          >
+          <button onClick={saveEvaluation} className="border-none rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer bg-[#800020] text-white shadow-md hover:opacity-90 transition-all">
             {saving ? '저장 중...' : '✓ 평가 저장'}
+          </button>
+          <button onClick={() => { sessionStorage.removeItem('kah_auth'); router.push('/') }}
+            className="border-[1.5px] border-red-200 rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer bg-white text-red-500 hover:bg-red-50 hover:border-red-400 transition-colors">
+            로그아웃
           </button>
         </div>
       </header>
@@ -795,74 +731,33 @@ export default function InterviewSystem() {
       <div className="flex items-start">
         {/* ── STICKY SIDEBAR ────────────────────────────────────────── */}
         <aside className="w-64 flex-shrink-0 sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto bg-white border-r border-gray-200 p-5">
-          <div className="text-xs font-bold text-gray-500 tracking-widest uppercase mb-4">
-            🏆 실시간 순위 (평균)
-          </div>
-          
-          {loading && (
-            <div className="text-sm text-gray-400 text-center mt-5">
-              로딩 중...
-            </div>
-          )}
+          <div className="text-xs font-bold text-gray-500 tracking-widest uppercase mb-4">🏆 실시간 순위 (평균)</div>
 
-          {!loading && candidates.length === 0 && (
-            <div className="text-sm text-gray-400 text-center mt-5">
-              지원자를 등록해주세요.
-            </div>
-          )}
+          {loading && <div className="text-sm text-gray-400 text-center mt-5">로딩 중...</div>}
+          {!loading && candidates.length === 0 && <div className="text-sm text-gray-400 text-center mt-5">지원자를 등록해주세요.</div>}
 
           {!loading && candidates.map((c, i) => {
             const isActive = c.id === selectedCandidateId
-            const rankColors = {
-              1: 'bg-yellow-500',
-              2: 'bg-gray-400',
-              3: 'bg-orange-600',
-            }
-
+            const rankColors = { 1: 'bg-yellow-500', 2: 'bg-gray-400', 3: 'bg-orange-600' }
             return (
               <div key={c.id}>
                 <div
-                  className={`rank-item flex items-center gap-2 p-3 rounded-lg mb-1.5 cursor-pointer transition-all ${
-                    isActive ? 'bg-blue-50 border-[1.5px] border-blue-200' : 'bg-gray-50 border-[1.5px] border-transparent'
-                  }`}
+                  className={`flex items-center gap-2 p-3 rounded-lg mb-1.5 cursor-pointer transition-all ${isActive ? 'bg-red-50 border-[1.5px] border-[#800020]/30' : 'bg-gray-50 border-[1.5px] border-transparent hover:bg-red-50/50'}`}
                   onClick={() => handleCandidateClick(c)}
                 >
-                  <div
-                    className={`w-5.5 h-5.5 rounded-md flex items-center justify-center text-xs font-extrabold flex-shrink-0 ${
-                      rankColors[i + 1] || 'bg-gray-200'
-                    } ${i + 1 <= 3 ? 'text-white' : 'text-gray-500'}`}
-                  >
-                    {i + 1}
-                  </div>
+                  <div className={`w-6 h-6 rounded-md flex items-center justify-center text-xs font-extrabold flex-shrink-0 ${rankColors[i + 1] || 'bg-gray-200'} ${i + 1 <= 3 ? 'text-white' : 'text-gray-500'}`}>{i + 1}</div>
                   <div className="flex-1">
                     <div className="text-sm font-bold text-gray-800">{c.name}</div>
                     <div className="text-xs text-gray-500 flex items-center gap-1">
-                      평균: {c.avg_score}점 ({c.evaluation_count}명)
+                      평균: {Number(c.avg_score).toFixed(1)}점 ({c.evaluation_count}명)
                       {c.is_olympic && <span className="text-[9px] font-bold text-amber-500 bg-amber-50 px-1 py-0.5 rounded">올림픽</span>}
                     </div>
                   </div>
-                  <div className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
-                    {toHundred(c.avg_score, maxTotal)}점
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      deleteCandidate(c.id)
-                    }}
-                    className="border-none bg-transparent text-red-400 text-xs px-1 py-0.5 cursor-pointer font-bold hover:text-red-600 transition-colors flex-shrink-0"
-                    title="삭제"
-                  >
-                    ✕
-                  </button>
+                  <div className="text-xs font-bold px-2 py-0.5 rounded-full bg-red-50 text-[#800020]">{toHundred(c.avg_score, maxTotal)}점</div>
+                  <button onClick={(e) => { e.stopPropagation(); deleteCandidate(c.id) }} className="border-none bg-transparent text-red-400 text-xs px-1 cursor-pointer font-bold hover:text-red-600 flex-shrink-0" title="삭제">✕</button>
                 </div>
                 {c.evaluation_count > 0 && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setShowDetailsModal(c.id)
-                    }}
-                    className="border-none bg-transparent text-blue-600 text-xs px-3 py-1 cursor-pointer font-semibold ml-2 mb-1.5 hover:underline"
-                  >
+                  <button onClick={(e) => { e.stopPropagation(); setShowDetailsModal(c.id) }} className="border-none bg-transparent text-[#800020] text-xs px-3 py-1 cursor-pointer font-semibold ml-2 mb-1.5 hover:underline">
                     📊 평가 상세보기
                   </button>
                 )}
@@ -872,12 +767,8 @@ export default function InterviewSystem() {
 
           <div className="mt-5 p-3.5 rounded-lg bg-gray-50 border border-gray-200">
             <div className="text-xs text-gray-400 tracking-wide mb-1 font-semibold">현재 평가 중</div>
-            <div className="text-sm font-bold text-[#1e3a5f]">
-              {currentCandidate?.name || "—"}
-            </div>
-            <div className="text-xs text-blue-600 font-bold">
-              내 점수: {total}점 / {maxTotal}점
-            </div>
+            <div className="text-sm font-bold text-[#1e3a5f]">{currentCandidate?.name || "—"}</div>
+            <div className="text-xs text-[#800020] font-bold">내 점수: {Number(total).toFixed(1)}점 / {maxTotal}점</div>
           </div>
         </aside>
 
@@ -886,31 +777,21 @@ export default function InterviewSystem() {
           {/* PDF Upload */}
           {!currentCandidate && (
             <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-5 shadow-sm">
-              <div className="text-sm font-bold uppercase tracking-widest text-gray-500 mb-4 flex items-center gap-2">
-                📎 지원서 업로드 (PDF)
-              </div>
+              <div className="text-sm font-bold uppercase tracking-widest text-gray-500 mb-4 flex items-center gap-2">📎 지원서 업로드 (PDF)</div>
               <div
-                className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
-                  dragging ? 'border-blue-600 bg-blue-50' : 'border-gray-300 bg-gray-50'
-                }`}
+                className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${dragging ? 'border-[#800020] bg-red-50' : 'border-gray-300 bg-gray-50'}`}
                 onClick={() => fileRef.current?.click()}
                 onDragOver={e => { e.preventDefault(); setDragging(true) }}
                 onDragLeave={() => setDragging(false)}
                 onDrop={handleDrop}
               >
                 <div className="text-3xl mb-2">📄</div>
-                <div className="text-sm text-gray-500 font-semibold">
-                  PDF 파일을 드래그하거나 클릭하여 업로드하세요
-                </div>
+                <div className="text-sm text-gray-500 font-semibold">PDF 파일을 드래그하거나 클릭하여 업로드하세요</div>
                 <div className="text-xs text-gray-400 mt-1">지원서의 정보가 자동으로 입력됩니다</div>
               </div>
               <input ref={fileRef} type="file" accept=".pdf" className="hidden" onChange={handleDrop} />
               {parseMsg && (
-                <div
-                  className={`mt-2.5 text-sm px-3 py-2 rounded-lg font-semibold ${
-                    parseMsg.startsWith("✅") ? 'text-green-700 bg-green-100' : 'text-gray-600 bg-gray-100'
-                  }`}
-                >
+                <div className={`mt-2.5 text-sm px-3 py-2 rounded-lg font-semibold ${parseMsg.startsWith("✅") ? 'text-green-700 bg-green-100' : 'text-gray-600 bg-gray-100'}`}>
                   {parseMsg}
                 </div>
               )}
@@ -920,10 +801,9 @@ export default function InterviewSystem() {
           {/* Applicant Info */}
           {currentCandidate && (
             <>
+              {/* ── 지원자 정보 ───────────────────────────────────────── */}
               <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-5 shadow-sm">
-                <div className="text-sm font-bold uppercase tracking-widest text-gray-500 mb-4">
-                  👤 지원자 정보
-                </div>
+                <div className="text-sm font-bold uppercase tracking-widest text-gray-500 mb-4">👤 지원자 정보</div>
                 <div className="flex gap-3 mb-3 flex-wrap">
                   {inputField("이름", "name")}
                   {inputField("생년월일", "dob")}
@@ -936,194 +816,275 @@ export default function InterviewSystem() {
                   {inputField("전공", "major")}
                   {inputField("학년-학기", "grade")}
                 </div>
-                <div className="flex gap-3 mb-3 flex-wrap">
-                  {inputField("주소", "address", true)}
-                </div>
+                <div className="flex gap-3 mb-3 flex-wrap">{inputField("주소", "address", true)}</div>
                 <div className="flex gap-3 mb-3 flex-wrap">
                   <div className="flex flex-col gap-1 flex-1 min-w-full">
                     <label className="text-xs font-semibold text-gray-400 tracking-wide">경력 및 활동사항</label>
-                    <textarea
-                      rows={2}
-                      value={currentCandidate?.info?.career || ""}
-                      onChange={e => updateCandidateInfo("career", e.target.value)}
-                      className="border-[1.5px] border-gray-200 rounded-lg px-3 py-2 text-sm outline-none text-gray-800 resize-vertical min-h-[52px] leading-relaxed bg-gray-50 focus:border-blue-600 focus:bg-white"
-                      placeholder="경력 및 활동사항을 입력하세요"
-                    />
+                    <textarea rows={2} value={currentCandidate?.info?.career || ""} onChange={e => updateCandidateInfo("career", e.target.value)}
+                      className="border-[1.5px] border-gray-200 rounded-lg px-3 py-2 text-sm outline-none text-gray-800 resize-vertical min-h-[52px] leading-relaxed bg-gray-50 focus:border-[#800020] focus:bg-white"
+                      placeholder="경력 및 활동사항을 입력하세요" />
                   </div>
                 </div>
-                <div className="flex gap-3 flex-wrap">
-                  {inputField("면접 일정", "schedule")}
+                <div className="flex gap-3 flex-wrap">{inputField("면접 일정", "schedule")}</div>
+
+                {/* ── 돌발 질문 토글 ─────────────────────────────────── */}
+                <div className="mt-4 pt-4 border-t border-gray-100">
+                  <div className="flex items-center justify-between">
+                    {/* 토글 버튼 */}
+                    <button
+                      onClick={() => setSurpriseTopicsOpen(v => !v)}
+                      className="flex items-center gap-2 bg-transparent border-none cursor-pointer text-sm font-bold text-[#1e3a5f] p-0"
+                    >
+                      <span className="text-gray-400 text-xs transition-transform duration-200" style={{ display: 'inline-block', transform: surpriseTopicsOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+                      💡 돌발 질문 주제
+                      {selectedSurpriseTopics.length > 0 && (
+                        <span className="bg-[#800020] text-white text-[11px] font-bold px-2 py-0.5 rounded-full">{selectedSurpriseTopics.length}개 선택</span>
+                      )}
+                    </button>
+
+                    {/* 수정 / 추가 버튼 */}
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={() => { setIsEditingSurpriseTopics(v => !v); setEditingSurpriseTopicId(null); if (!surpriseTopicsOpen) setSurpriseTopicsOpen(true) }}
+                        className="border-[1.5px] border-gray-200 rounded-md px-2.5 py-1 text-xs font-semibold cursor-pointer bg-white text-gray-600 hover:border-[#800020] hover:text-[#800020] transition-colors"
+                      >
+                        {isEditingSurpriseTopics ? '✓ 완료' : '✏️ 수정'}
+                      </button>
+                      <button
+                        onClick={() => { setSurpriseTopicsOpen(true); setIsAddingSurpriseTopic(true); setNewSurpriseTopicText('') }}
+                        className="border-none rounded-md px-2.5 py-1 text-xs font-semibold cursor-pointer bg-[#800020] text-white hover:opacity-85 transition-opacity"
+                      >
+                        + 추가
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 주제 목록 */}
+                  {surpriseTopicsOpen && (
+                    <div className="mt-3">
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {surpriseTopics.map(topic => (
+                          <div key={topic.id} className="inline-flex items-center gap-1">
+                            {isEditingSurpriseTopics ? (
+                              editingSurpriseTopicId === topic.id ? (
+                                <div className="flex items-center gap-1.5">
+                                  <input
+                                    value={editingSurpriseTopicText}
+                                    onChange={e => setEditingSurpriseTopicText(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter') saveSurpriseTopicEdit(topic.id); if (e.key === 'Escape') setEditingSurpriseTopicId(null) }}
+                                    className="border-[1.5px] border-[#800020] rounded-lg px-2 py-1 text-xs outline-none bg-white w-28"
+                                    autoFocus
+                                  />
+                                  <button onClick={() => saveSurpriseTopicEdit(topic.id)} className="border-none bg-[#800020] text-white text-xs px-2 py-1 rounded-md cursor-pointer font-semibold">저장</button>
+                                  <button onClick={() => setEditingSurpriseTopicId(null)} className="border-[1.5px] border-gray-200 bg-white text-gray-500 text-xs px-2 py-1 rounded-md cursor-pointer">취소</button>
+                                </div>
+                              ) : (
+                                <div className="inline-flex items-center gap-1">
+                                  <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 border border-gray-200 text-gray-600">{topic.text}</span>
+                                  <button onClick={() => { setEditingSurpriseTopicId(topic.id); setEditingSurpriseTopicText(topic.text) }} className="border-none bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded cursor-pointer" title="수정">✏️</button>
+                                  <button onClick={() => deleteSurpriseTopic(topic.id)} className="border-none bg-red-100 text-red-600 text-xs px-1.5 py-0.5 rounded cursor-pointer font-bold" title="삭제">×</button>
+                                </div>
+                              )
+                            ) : (
+                              <button
+                                onClick={() => toggleSurpriseTopic(topic.id)}
+                                className={`px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
+                                  selectedSurpriseTopics.includes(topic.id)
+                                    ? 'border-[#800020] bg-red-50 text-[#800020] shadow-sm'
+                                    : 'border-gray-200 bg-gray-50 text-gray-500 hover:border-[#800020]/50'
+                                }`}
+                              >
+                                {selectedSurpriseTopics.includes(topic.id) && '✓ '}{topic.text}
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* 새 주제 추가 */}
+                      {isAddingSurpriseTopic && (
+                        <div className="flex gap-1.5 mt-2">
+                          <input
+                            value={newSurpriseTopicText}
+                            onChange={e => setNewSurpriseTopicText(e.target.value)}
+                            placeholder="새 돌발 질문 주제 입력..."
+                            className="border-[1.5px] border-gray-200 rounded-lg px-3 py-1.5 text-xs outline-none bg-gray-50 flex-1 focus:border-[#800020] focus:bg-white"
+                            onKeyDown={e => { if (e.key === 'Enter') addSurpriseTopic(); if (e.key === 'Escape') setIsAddingSurpriseTopic(false) }}
+                            autoFocus
+                          />
+                          <button onClick={addSurpriseTopic} className="border-none bg-[#800020] text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold hover:opacity-85">추가</button>
+                          <button onClick={() => setIsAddingSurpriseTopic(false)} className="border-[1.5px] border-gray-200 bg-white text-gray-500 text-xs px-3 py-1.5 rounded-lg cursor-pointer">취소</button>
+                        </div>
+                      )}
+
+                      {/* 선택 요약 */}
+                      {selectedSurpriseTopics.length > 0 && !isEditingSurpriseTopics && (
+                        <div className="mt-2 px-3 py-2 rounded-lg bg-red-50 border border-red-100">
+                          <span className="text-xs font-bold text-[#800020]">선택된 주제: </span>
+                          <span className="text-xs text-[#800020]/80">
+                            {surpriseTopics.filter(t => selectedSurpriseTopics.includes(t.id)).map(t => t.text).join(' · ')}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* Two-column: Scoring + Radar */}
+              {/* ── 평가 항목 + 레이더 ────────────────────────────────── */}
               <div className="flex gap-5 flex-wrap">
-                {/* Scoring */}
+                {/* 평가 항목 */}
                 <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm flex-1 min-w-[320px]">
-                  <div className="text-sm font-bold uppercase tracking-widest text-gray-500 mb-4">
-                    📊 평가 항목
+                  {/* 헤더 */}
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="text-sm font-bold uppercase tracking-widest text-gray-500">📊 평가 항목</div>
+                    <div className="flex gap-1.5">
+                      {isEditingEval ? (
+                        <>
+                          <button onClick={saveEvalEdit} disabled={evalSaving}
+                            className="border-none bg-[#800020] text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold hover:opacity-85 disabled:opacity-60">
+                            {evalSaving ? '저장 중...' : '✓ 저장'}
+                          </button>
+                          <button onClick={cancelEvalEdit} disabled={evalSaving}
+                            className="border-[1.5px] border-gray-200 bg-white text-gray-500 text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold hover:border-gray-400">
+                            취소
+                          </button>
+                        </>
+                      ) : (
+                        <button onClick={startEvalEdit}
+                          className="border-[1.5px] border-gray-200 bg-white text-gray-600 text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold hover:border-[#800020] hover:text-[#800020] transition-colors">
+                          ✏️ 수정
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="text-sm font-bold text-[#1e3a5f] mb-1.5 pt-1">
-                    직무적합도 <span className="text-gray-400 font-medium">(9점 만점)</span>
-                  </div>
-                  <ScoreInput label="성실성" field="sincerity" scores={currentScores} max={MAX_SCORES.sincerity} onChange={updateScore} />
-                  <ScoreInput label="협조성" field="cooperation" scores={currentScores} max={MAX_SCORES.cooperation} onChange={updateScore} />
-                  <ScoreInput label="계획성" field="planning" scores={currentScores} max={MAX_SCORES.planning} onChange={updateScore} />
+                  {isEditingEval && (
+                    <div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 font-semibold">
+                      ✏️ 항목명과 만점을 수정한 후 저장 버튼을 누르세요.
+                    </div>
+                  )}
 
-                  <div className="text-sm font-bold text-[#1e3a5f] mb-1.5 pt-3">
-                    의사소통 <span className="text-gray-400 font-medium">(6점 만점)</span>
-                  </div>
-                  <ScoreInput label="표현력" field="expression" scores={currentScores} max={MAX_SCORES.expression} onChange={updateScore} />
-                  <ScoreInput label="상식성" field="commonsense" scores={currentScores} max={MAX_SCORES.commonsense} onChange={updateScore} />
+                  {/* 카테고리별 렌더링 */}
+                  {displayCategories.map((cat, catIdx) => {
+                    const catMax = cat.items.reduce((s, i) => s + i.max, 0)
+                    return (
+                      <div key={cat.id}>
+                        <div className={`flex items-center gap-2 text-sm font-bold text-[#1e3a5f] mb-1.5 ${catIdx === 0 ? 'pt-1' : 'pt-3'}`}>
+                          {isEditingEval ? (
+                            <input
+                              value={cat.label}
+                              onChange={e => updateEditTempCatLabel(cat.id, e.target.value)}
+                              className="border-[1.5px] border-gray-200 rounded-lg px-2 py-1 text-sm font-bold outline-none focus:border-[#800020] w-28"
+                            />
+                          ) : <span>{cat.label}</span>}
+                          <span className="text-gray-400 font-medium text-xs">({catMax}점 만점)</span>
+                        </div>
 
-                  <div className="text-sm font-bold text-[#1e3a5f] mb-1.5 pt-3">
-                    인성 <span className="text-gray-400 font-medium">(6점 만점)</span>
-                  </div>
-                  <ScoreInput label="적극성" field="proactivity" scores={currentScores} max={MAX_SCORES.proactivity} onChange={updateScore} />
-                  <ScoreInput label="인성" field="personality" scores={currentScores} max={MAX_SCORES.personality} onChange={updateScore} />
-
-                  <div className="text-sm font-bold text-[#1e3a5f] mb-1.5 pt-3">
-                    돌발질문 <span className="text-gray-400 font-medium">(각 5점 만점)</span>
-                  </div>
-                  <ScoreInput label="내용 1" field="q1" scores={currentScores} max={MAX_SCORES.q1} onChange={updateScore} />
-                  <ScoreInput label="내용 2" field="q2" scores={currentScores} max={MAX_SCORES.q2} onChange={updateScore} />
-                  <ScoreInput label="이해력" field="comprehension" scores={currentScores} max={MAX_SCORES.comprehension} onChange={updateScore} />
-                  <ScoreInput label="논리력" field="logic" scores={currentScores} max={MAX_SCORES.logic} onChange={updateScore} />
-                  <ScoreInput label="창의력" field="creativity" scores={currentScores} max={MAX_SCORES.creativity} onChange={updateScore} />
+                        {cat.items.map(item => (
+                          isEditingEval ? (
+                            <div key={item.field} className="flex items-center py-2 border-b border-gray-100 gap-2">
+                              <input
+                                value={item.label}
+                                onChange={e => updateEditTempItemLabel(cat.id, item.field, e.target.value)}
+                                className="border-[1.5px] border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none flex-1 focus:border-[#800020] bg-gray-50"
+                                placeholder="항목명"
+                              />
+                              <span className="text-xs text-gray-400 whitespace-nowrap">만점</span>
+                              <input
+                                type="number" min={1} max={20} value={item.max}
+                                onChange={e => updateEditTempItemMax(cat.id, item.field, Number(e.target.value))}
+                                className="w-14 border-[1.5px] border-gray-200 rounded-lg px-2 py-1.5 text-xs text-center outline-none focus:border-[#800020] bg-gray-50"
+                              />
+                              <span className="text-xs text-gray-400">점</span>
+                            </div>
+                          ) : (
+                            <ScoreInput key={item.field} label={item.label} field={item.field} scores={currentScores} max={item.max} onChange={updateScore} />
+                          )
+                        ))}
+                      </div>
+                    )
+                  })}
 
                   {/* Total */}
-                  <div className="bg-gradient-to-br from-[#1e3a5f] to-[#2563eb] rounded-xl p-4 mt-4 flex items-center justify-between text-white">
+                  <div className="bg-[#800020] rounded-xl p-4 mt-4 flex items-center justify-between text-white">
                     <div>
                       <div className="text-xs opacity-70 tracking-widest">MY SCORE</div>
-                      <div className="text-3xl font-black">{total}</div>
+                      <div className="text-3xl font-black">{Number(total).toFixed(1)}</div>
                     </div>
                     <div className="text-right">
                       <div className="text-xs opacity-70">/ {maxTotal}점</div>
                       <div className="text-2xl font-extrabold">{toHundred(total, maxTotal)}점</div>
                       <div className="mt-1 h-1.5 w-24 bg-white/20 rounded-full overflow-hidden">
-                        <div
-                          style={{ width: `${(total / maxTotal) * 100}%` }}
-                          className="h-full bg-white rounded-full transition-all duration-300"
-                        />
+                        <div style={{ width: `${(total / maxTotal) * 100}%` }} className="h-full bg-white rounded-full transition-all duration-300" />
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Radar */}
+                {/* 역량 레이더 */}
                 <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm min-w-[280px] flex-1 flex flex-col">
-                  <div className="text-sm font-bold uppercase tracking-widest text-gray-500 mb-4">
-                    🕸 역량 레이더
-                  </div>
-                  <CompetencyRadar scores={currentScores} />
+                  <div className="text-sm font-bold uppercase tracking-widest text-gray-500 mb-4">🕸 역량 레이더</div>
+                  <CompetencyRadar scores={currentScores} evalCategories={evalCategories} />
                   <div className="flex flex-wrap gap-2 mt-3">
-                    {[
-                      { label: "직무적합도", val: (currentScores.sincerity || 0) + (currentScores.cooperation || 0) + (currentScores.planning || 0), max: 9 },
-                      { label: "의사소통", val: (currentScores.expression || 0) + (currentScores.commonsense || 0), max: 6 },
-                      { label: "인성", val: (currentScores.proactivity || 0) + (currentScores.personality || 0), max: 6 },
-                      { label: "이해력", val: currentScores.comprehension || 0, max: 5 },
-                      { label: "논리력", val: currentScores.logic || 0, max: 5 },
-                      { label: "창의력", val: currentScores.creativity || 0, max: 5 },
-                    ].map(d => (
-                      <div key={d.label} className="flex-1 min-w-[80px] p-2 rounded-lg bg-gray-50 border border-gray-200 text-center">
-                        <div className="text-xs text-gray-400 font-semibold mb-0.5">{d.label}</div>
-                        <div className="text-lg font-extrabold text-[#1e3a5f]">{d.val}</div>
-                        <div className="text-[9px] text-gray-400">/ {d.max}</div>
-                      </div>
-                    ))}
+                    {evalCategories.map(cat => {
+                      const catScore = cat.items.reduce((sum, item) => sum + (currentScores[item.field] || 0), 0)
+                      const catMax   = cat.items.reduce((sum, item) => sum + item.max, 0)
+                      return (
+                        <div key={cat.id} className="flex-1 min-w-[80px] p-2 rounded-lg bg-gray-50 border border-gray-200 text-center">
+                          <div className="text-xs text-gray-400 font-semibold mb-0.5">{cat.label}</div>
+                          <div className="text-lg font-extrabold text-[#1e3a5f]">{Number(catScore).toFixed(1)}</div>
+                          <div className="text-[9px] text-gray-400">/ {catMax}</div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               </div>
 
-              {/* Qualitative Feedback */}
+              {/* ── 질적 피드백 ───────────────────────────────────────── */}
               <div className="bg-white rounded-2xl border border-gray-200 p-6 mt-5 shadow-sm">
-                <div className="text-sm font-bold uppercase tracking-widest text-gray-500 mb-4">
-                  💬 질적 피드백 태그
-                </div>
+                <div className="text-sm font-bold uppercase tracking-widest text-gray-500 mb-4">💬 질적 피드백 태그</div>
                 <div className="mb-3">
                   <div className="text-xs font-bold text-green-700 mb-2 tracking-wide">✅ POSITIVE</div>
                   {POSITIVE_TAGS.map(t => (
-                    <button
-                      key={t}
-                      className="tag-btn inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border-none cursor-pointer bg-green-100 text-green-700 mr-1.5 mb-1.5 transition-all hover:scale-95"
-                      onClick={() => toggleTag(t, "positive")}
-                      style={{
-                        opacity: currentTags.find(x => x.text === t) ? 1 : 0.55,
-                        transform: currentTags.find(x => x.text === t) ? 'scale(1.04)' : 'scale(1)',
-                        boxShadow: currentTags.find(x => x.text === t) ? '0 2px 8px rgba(34,197,94,0.25)' : 'none',
-                      }}
-                    >
-                      {t}
-                    </button>
+                    <button key={t} onClick={() => toggleTag(t, "positive")}
+                      className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border-none cursor-pointer bg-green-100 text-green-700 mr-1.5 mb-1.5 transition-all"
+                      style={{ opacity: currentTags.find(x => x.text === t) ? 1 : 0.55, transform: currentTags.find(x => x.text === t) ? 'scale(1.04)' : 'scale(1)', boxShadow: currentTags.find(x => x.text === t) ? '0 2px 8px rgba(34,197,94,0.25)' : 'none' }}
+                    >{t}</button>
                   ))}
                 </div>
                 <div className="mb-4">
                   <div className="text-xs font-bold text-red-700 mb-2 tracking-wide">❌ NEGATIVE</div>
                   {NEGATIVE_TAGS.map(t => (
-                    <button
-                      key={t}
-                      className="tag-btn inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border-none cursor-pointer bg-red-100 text-red-700 mr-1.5 mb-1.5 transition-all hover:scale-95"
-                      onClick={() => toggleTag(t, "negative")}
-                      style={{
-                        opacity: currentTags.find(x => x.text === t) ? 1 : 0.55,
-                        transform: currentTags.find(x => x.text === t) ? 'scale(1.04)' : 'scale(1)',
-                        boxShadow: currentTags.find(x => x.text === t) ? '0 2px 8px rgba(239,68,68,0.2)' : 'none',
-                      }}
-                    >
-                      {t}
-                    </button>
+                    <button key={t} onClick={() => toggleTag(t, "negative")}
+                      className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border-none cursor-pointer bg-red-100 text-red-700 mr-1.5 mb-1.5 transition-all"
+                      style={{ opacity: currentTags.find(x => x.text === t) ? 1 : 0.55, transform: currentTags.find(x => x.text === t) ? 'scale(1.04)' : 'scale(1)', boxShadow: currentTags.find(x => x.text === t) ? '0 2px 8px rgba(239,68,68,0.2)' : 'none' }}
+                    >{t}</button>
                   ))}
                 </div>
-
                 <div className="border-t border-gray-100 pt-3.5">
                   <div className="text-xs font-bold text-gray-500 mb-2 tracking-wide">선택된 태그</div>
                   {currentTags.length === 0 && <span className="text-sm text-gray-300">태그를 선택하면 여기에 표시됩니다.</span>}
                   {currentTags.map((t, i) => (
-                    <span
-                      key={i}
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold mr-1.5 mb-1.5 ${
-                        t.type === 'positive' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-                      }`}
-                    >
+                    <span key={i} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold mr-1.5 mb-1.5 ${t.type === 'positive' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'}`}>
                       {t.text}
-                      <span
-                        onClick={() => toggleTag(t.text, t.type)}
-                        className="cursor-pointer text-sm leading-none ml-0.5"
-                      >
-                        ×
-                      </span>
+                      <span onClick={() => toggleTag(t.text, t.type)} className="cursor-pointer text-sm leading-none ml-0.5">×</span>
                     </span>
                   ))}
                 </div>
-
                 <div className="mt-3.5">
                   <div className="text-xs font-bold text-gray-500 mb-1.5 tracking-wide">면접 메모</div>
-                  <textarea
-                    rows={3}
-                    value={currentNote}
-                    onChange={e => setCurrentNote(e.target.value)}
+                  <textarea rows={3} value={currentNote} onChange={e => setCurrentNote(e.target.value)}
                     placeholder="추가 메모를 입력하세요..."
-                    className="border-[1.5px] border-gray-200 rounded-lg px-3 py-2 text-sm outline-none text-gray-800 resize-vertical leading-relaxed w-full bg-gray-50 focus:border-blue-600 focus:bg-white"
-                  />
+                    className="border-[1.5px] border-gray-200 rounded-lg px-3 py-2 text-sm outline-none text-gray-800 resize-vertical leading-relaxed w-full bg-gray-50 focus:border-[#800020] focus:bg-white" />
                 </div>
               </div>
 
               {/* Bottom actions */}
               <div className="flex gap-3 justify-end mb-10 mt-5">
-                <button
-                  onClick={newCandidate}
-                  className="border-none rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer bg-white border-[1.5px] border-gray-200 text-gray-600 hover:border-blue-600 hover:text-blue-600 transition-colors"
-                >
-                  새 지원자
-                </button>
-                <button
-                  onClick={() => {
-                    console.log('Bottom button clicked!')
-                    saveEvaluation()
-                  }}
-                  className="border-none rounded-lg px-7 py-2.5 text-sm font-semibold cursor-pointer bg-gradient-to-br from-[#1e3a5f] to-[#2563eb] text-white shadow-md hover:opacity-90 hover:-translate-y-0.5 transition-all"
-                >
+                <button onClick={newCandidate} className="border-[1.5px] border-gray-200 rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer bg-white text-gray-600 hover:border-[#800020] hover:text-[#800020] transition-colors">새 지원자</button>
+                <button onClick={saveEvaluation} className="border-none rounded-lg px-7 py-2.5 text-sm font-semibold cursor-pointer bg-[#800020] text-white shadow-md hover:opacity-90 transition-all">
                   {saving ? '저장 중...' : '✓ 평가 저장 & 순위 반영'}
                 </button>
               </div>
@@ -1138,17 +1099,14 @@ export default function InterviewSystem() {
           candidate={candidates.find(c => c.id === showDetailsModal)}
           onClose={() => setShowDetailsModal(null)}
           onUpdate={fetchCandidates}
+          evalCategories={evalCategories}
         />
       )}
 
       {/* Toast Notification */}
       {toast && (
-        <div
-          className={`fixed top-20 right-5 z-[9999] px-6 py-4 rounded-xl shadow-2xl text-sm font-semibold min-w-[300px] ${
-            toast.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-          }`}
-          style={{ animation: 'slideIn 0.3s ease' }}
-        >
+        <div className={`fixed top-20 right-5 z-[9999] px-6 py-4 rounded-xl shadow-2xl text-sm font-semibold min-w-[300px] ${toast.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'}`}
+          style={{ animation: 'slideIn 0.3s ease' }}>
           {toast.message}
         </div>
       )}
