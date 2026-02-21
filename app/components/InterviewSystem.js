@@ -59,13 +59,13 @@ const POSITIVE_TAGS = ["논리정연함", "자신감 있음", "준비 철저", "
 const NEGATIVE_TAGS = ["소극적 태도", "동문서답", "근거 부족", "목소리 작음", "긴장함", "협업 우려", "방어적 태도"]
 
 const DEFAULT_INTERVIEW_QUESTIONS = [
-  "간단하게 자기소개를 해주세요.",
-  "우리 단체에 지원하게 된 동기가 무엇인가요?",
-  "본인의 강점과 약점을 솔직하게 말씀해주세요.",
-  "팀 프로젝트에서 어려움이 있었던 경험과 극복 방법을 말씀해주세요.",
-  "입단 후 본인이 기여할 수 있는 부분은 무엇인가요?",
-  "갈등 상황에서 어떻게 대처하시나요?",
-  "마지막으로 하고 싶으신 말씀이 있으시면 해주세요.",
+  { id: 1, text: "간단하게 자기소개를 해주세요." },
+  { id: 2, text: "우리 단체에 지원하게 된 동기가 무엇인가요?" },
+  { id: 3, text: "본인의 강점과 약점을 솔직하게 말씀해주세요." },
+  { id: 4, text: "팀 프로젝트에서 어려움이 있었던 경험과 극복 방법을 말씀해주세요." },
+  { id: 5, text: "입단 후 본인이 기여할 수 있는 부분은 무엇인가요?" },
+  { id: 6, text: "갈등 상황에서 어떻게 대처하시나요?" },
+  { id: 7, text: "마지막으로 하고 싶으신 말씀이 있으시면 해주세요." },
 ]
 
 // ─── Olympic Scoring Helper ────────────────────────────────────────────────────
@@ -229,11 +229,17 @@ function CompetencyRadar({ scores, evalCategories }) {
 
 // ─── Evaluation Details Modal ─────────────────────────────────────────────────
 function EvaluationDetailsModal({ candidate, onClose, onUpdate, evalCategories }) {
-  if (!candidate || !candidate.evaluations || candidate.evaluations.length === 0) return null
+  // hooks는 early return 전에 선언
+  const [localEvaluations, setLocalEvaluations] = useState(candidate?.evaluations || [])
+  useEffect(() => {
+    if (candidate?.evaluations) setLocalEvaluations(candidate.evaluations)
+  }, [candidate?.evaluations])
+
+  if (!candidate || localEvaluations.length === 0) return null
 
   const maxTotal = evalCategories.reduce((sum, cat) => sum + cat.items.reduce((s, i) => s + i.max, 0), 0)
-  const { score: displayScore, isOlympic } = calcDisplayScore(candidate.evaluations)
-  const n = candidate.evaluations.length
+  const { score: displayScore, isOlympic } = calcDisplayScore(localEvaluations)
+  const n = localEvaluations.length
 
   const labelMap = {}
   evalCategories.forEach(cat => cat.items.forEach(item => { labelMap[item.field] = item.label }))
@@ -248,12 +254,18 @@ function EvaluationDetailsModal({ candidate, onClose, onUpdate, evalCategories }
   }
 
   const handleDeleteEvaluation = async (evaluation) => {
-    if (!confirm(`면접관 "${evaluation.interviewer_id}"의 평가를 삭제하시겠습니까?`)) return
+    if (!confirm(`"${evaluation.interviewer_id}"의 평가를 삭제하시겠습니까?`)) return
+    // 낙관적 UI — 선택한 evaluation.id 기준으로 즉시 제거
+    setLocalEvaluations(prev => prev.filter(e => e.id !== evaluation.id))
     try {
       const { error } = await supabase.from('evaluations').delete().eq('id', evaluation.id)
       if (error) throw error
       if (onUpdate) onUpdate()
-    } catch (err) { console.error('Error deleting evaluation:', err) }
+    } catch (err) {
+      // 실패 시 원래 상태로 복원
+      setLocalEvaluations(candidate.evaluations)
+      console.error('Error deleting evaluation:', err)
+    }
   }
 
   return (
@@ -288,8 +300,8 @@ function EvaluationDetailsModal({ candidate, onClose, onUpdate, evalCategories }
 
         <div className="text-sm font-bold text-gray-500 mb-3 uppercase tracking-wider">개별 평가 내역</div>
 
-        {candidate.evaluations.map((evaluation, idx) => (
-          <div key={idx} className="bg-gray-50 rounded-xl p-4 mb-3 border border-gray-200">
+        {localEvaluations.map((evaluation, idx) => (
+          <div key={evaluation.id} className="bg-gray-50 rounded-xl p-4 mb-3 border border-gray-200">
             <div className="flex justify-between items-center mb-3">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-[#800020] text-white flex items-center justify-center text-xs font-bold">{idx + 1}</div>
@@ -366,6 +378,18 @@ export default function InterviewSystem() {
     try { return localStorage.getItem('kah_evaluator_name') || '' } catch { return '' }
   })
   const [checkedQuestions, setCheckedQuestions] = useState(new Set())
+  // ── 면접 질문 관리 상태 ────────────────────────────────────────────────────
+  const [interviewQuestions, setInterviewQuestions] = useState(() => {
+    try {
+      const saved = localStorage.getItem('kah_interview_questions')
+      return saved ? JSON.parse(saved) : DEFAULT_INTERVIEW_QUESTIONS
+    } catch { return DEFAULT_INTERVIEW_QUESTIONS }
+  })
+  const [isEditingQuestions, setIsEditingQuestions] = useState(false)
+  const [isAddingQuestion, setIsAddingQuestion] = useState(false)
+  const [newQuestionText, setNewQuestionText] = useState('')
+  const [editingQuestionId, setEditingQuestionId] = useState(null)
+  const [editingQuestionText, setEditingQuestionText] = useState('')
   const fileRef = useRef()
 
   // ── 평가항목 편집 상태 ────────────────────────────────────────────────────
@@ -419,6 +443,11 @@ export default function InterviewSystem() {
     await saveSetting('surprise_topics', topics)
   }
 
+  const persistInterviewQuestions = async (questions) => {
+    localStorage.setItem('kah_interview_questions', JSON.stringify(questions))
+    await saveSetting('interview_questions', questions)
+  }
+
   // 앱 시작 시 Supabase에서 최신 설정 로드
   useEffect(() => {
     const loadSettings = async () => {
@@ -431,6 +460,11 @@ export default function InterviewSystem() {
       if (remoteTopics) {
         setSurpriseTopics(remoteTopics)
         localStorage.setItem('kah_surprise_topics', JSON.stringify(remoteTopics))
+      }
+      const remoteQuestions = await loadSetting('interview_questions')
+      if (remoteQuestions) {
+        setInterviewQuestions(remoteQuestions)
+        localStorage.setItem('kah_interview_questions', JSON.stringify(remoteQuestions))
       }
     }
     loadSettings()
@@ -518,6 +552,32 @@ export default function InterviewSystem() {
     setSelectedSurpriseTopics(prev => prev.filter(x => x !== id))
   }
 
+  // ── 면접 질문 핸들러 ──────────────────────────────────────────────────────
+  const addInterviewQuestion = async () => {
+    if (!newQuestionText.trim()) return
+    const updated = [...interviewQuestions, { id: Date.now(), text: newQuestionText.trim() }]
+    setInterviewQuestions(updated)
+    await persistInterviewQuestions(updated)
+    setNewQuestionText('')
+    setIsAddingQuestion(false)
+  }
+
+  const saveInterviewQuestionEdit = async (id) => {
+    if (!editingQuestionText.trim()) return
+    const updated = interviewQuestions.map(q => q.id === id ? { ...q, text: editingQuestionText.trim() } : q)
+    setInterviewQuestions(updated)
+    await persistInterviewQuestions(updated)
+    setEditingQuestionId(null)
+    setEditingQuestionText('')
+  }
+
+  const deleteInterviewQuestion = async (id) => {
+    const updated = interviewQuestions.filter(q => q.id !== id)
+    setInterviewQuestions(updated)
+    await persistInterviewQuestions(updated)
+    setCheckedQuestions(new Set())
+  }
+
   // ── 기타 핸들러 ───────────────────────────────────────────────────────────
   const updateScore = (field, value) => setCurrentScores(prev => ({ ...prev, [field]: value }))
 
@@ -563,6 +623,20 @@ export default function InterviewSystem() {
 
   useEffect(() => { setInterviewerId(getInterviewerId()) }, [])
   useEffect(() => { fetchCandidates() }, [])
+
+  // ── Supabase Realtime — interview_questions 실시간 동기화 ──────────────────
+  useEffect(() => {
+    const channel = supabase
+      .channel('interview_questions_sync')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'app_settings', filter: 'key=eq.interview_questions' }, (payload) => {
+        if (payload.new?.value) {
+          setInterviewQuestions(payload.new.value)
+          try { localStorage.setItem('kah_interview_questions', JSON.stringify(payload.new.value)) } catch {}
+        }
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [])
 
   const fetchCandidates = async () => {
     try {
@@ -1105,12 +1179,15 @@ export default function InterviewSystem() {
 
               {/* ── 면접 질문 리스트 ──────────────────────────────────── */}
               {(() => {
-                const surpriseQList = surpriseTopics.filter(t => selectedSurpriseTopics.includes(t.id)).map(t => ({ text: t.text, isSurprise: true }))
+                const surpriseQList = surpriseTopics
+                  .filter(t => selectedSurpriseTopics.includes(t.id))
+                  .map(t => ({ id: t.id, text: t.text, isSurprise: true }))
                 const allQuestions = [
-                  ...DEFAULT_INTERVIEW_QUESTIONS.map(q => ({ text: q, isSurprise: false })),
+                  ...interviewQuestions.map(q => ({ ...q, isSurprise: false })),
                   ...surpriseQList,
                 ]
-                const doneCount = allQuestions.filter((_, i) => checkedQuestions.has(i)).length
+                const getKey = (q) => q.isSurprise ? `s${q.id}` : q.id
+                const doneCount = allQuestions.filter(q => checkedQuestions.has(getKey(q))).length
                 return (
                   <div className="bg-white rounded-2xl border border-gray-200 p-6 mt-5 shadow-sm">
                     <div className="flex items-center justify-between mb-4">
@@ -1120,38 +1197,91 @@ export default function InterviewSystem() {
                           {doneCount}/{allQuestions.length}
                         </span>
                       </div>
-                      <button
-                        onClick={() => setCheckedQuestions(new Set())}
-                        className="border-[1.5px] border-gray-200 rounded-lg px-2.5 py-1 text-xs font-semibold cursor-pointer bg-white text-gray-500 hover:border-[#800020] hover:text-[#800020] transition-colors"
-                      >↺ 초기화</button>
+                      <div className="flex gap-1.5">
+                        <button
+                          onClick={() => { setIsEditingQuestions(v => !v); setEditingQuestionId(null) }}
+                          className="border-[1.5px] border-gray-200 rounded-lg px-2.5 py-1 text-xs font-semibold cursor-pointer bg-white text-gray-600 hover:border-[#800020] hover:text-[#800020] transition-colors"
+                        >{isEditingQuestions ? '✓ 완료' : '✏️ 수정'}</button>
+                        <button
+                          onClick={() => { setIsAddingQuestion(true); setNewQuestionText('') }}
+                          className="border-none rounded-md px-2.5 py-1 text-xs font-semibold cursor-pointer bg-[#800020] text-white hover:opacity-85 transition-opacity"
+                        >+ 추가</button>
+                        <button
+                          onClick={() => setCheckedQuestions(new Set())}
+                          className="border-[1.5px] border-gray-200 rounded-lg px-2.5 py-1 text-xs font-semibold cursor-pointer bg-white text-gray-500 hover:border-gray-400 transition-colors"
+                        >↺ 초기화</button>
+                      </div>
                     </div>
+
+                    {/* 새 질문 추가 입력 */}
+                    {isAddingQuestion && (
+                      <div className="flex gap-1.5 mb-3">
+                        <input
+                          value={newQuestionText}
+                          onChange={e => setNewQuestionText(e.target.value)}
+                          placeholder="새 면접 질문을 입력하세요..."
+                          className="border-[1.5px] border-gray-200 rounded-lg px-3 py-1.5 text-sm outline-none bg-gray-50 flex-1 focus:border-[#800020] focus:bg-white"
+                          onKeyDown={e => { if (e.key === 'Enter') addInterviewQuestion(); if (e.key === 'Escape') setIsAddingQuestion(false) }}
+                          autoFocus
+                        />
+                        <button onClick={addInterviewQuestion} className="border-none bg-[#800020] text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold hover:opacity-85">추가</button>
+                        <button onClick={() => setIsAddingQuestion(false)} className="border-[1.5px] border-gray-200 bg-white text-gray-500 text-xs px-3 py-1.5 rounded-lg cursor-pointer">취소</button>
+                      </div>
+                    )}
+
                     <div>
-                      {allQuestions.map((q, i) => {
-                        const isChecked = checkedQuestions.has(i)
+                      {allQuestions.map((q) => {
+                        const questionKey = getKey(q)
+                        const isChecked = checkedQuestions.has(questionKey)
                         return (
-                          <div key={i} className="flex items-start gap-3 py-2.5 border-b border-gray-100 last:border-0">
-                            <input
-                              type="checkbox"
-                              id={`q-${i}`}
-                              checked={isChecked}
-                              onChange={() => setCheckedQuestions(prev => {
-                                const next = new Set(prev)
-                                if (next.has(i)) next.delete(i)
-                                else next.add(i)
-                                return next
-                              })}
-                              className="mt-0.5 w-4 h-4 flex-shrink-0 cursor-pointer accent-[#800020]"
-                            />
-                            <label
-                              htmlFor={`q-${i}`}
-                              className="text-sm cursor-pointer flex-1 leading-relaxed"
-                              style={isChecked ? { textDecoration: 'line-through', color: '#9ca3af' } : { color: '#374151' }}
-                            >
-                              {q.isSurprise && (
-                                <span className="inline-flex items-center mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#800020]/10 text-[#800020]">돌발</span>
-                              )}
-                              {q.text}
-                            </label>
+                          <div key={questionKey} className="flex items-start gap-3 py-2.5 border-b border-gray-100 last:border-0">
+                            {(!isEditingQuestions || q.isSurprise) ? (
+                              /* 체크박스 모드 */
+                              <>
+                                <input
+                                  type="checkbox"
+                                  id={`q-${questionKey}`}
+                                  checked={isChecked}
+                                  onChange={() => setCheckedQuestions(prev => {
+                                    const next = new Set(prev)
+                                    if (next.has(questionKey)) next.delete(questionKey)
+                                    else next.add(questionKey)
+                                    return next
+                                  })}
+                                  className="mt-0.5 w-4 h-4 flex-shrink-0 cursor-pointer accent-[#800020]"
+                                />
+                                <label
+                                  htmlFor={`q-${questionKey}`}
+                                  className="text-sm cursor-pointer flex-1 leading-relaxed"
+                                  style={isChecked ? { textDecoration: 'line-through', color: '#9ca3af' } : { color: '#374151' }}
+                                >
+                                  {q.isSurprise && (
+                                    <span className="inline-flex items-center mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#800020]/10 text-[#800020]">돌발</span>
+                                  )}
+                                  {q.text}
+                                </label>
+                              </>
+                            ) : editingQuestionId === q.id ? (
+                              /* 인라인 편집 모드 */
+                              <div className="flex items-center gap-1.5 flex-1">
+                                <input
+                                  value={editingQuestionText}
+                                  onChange={e => setEditingQuestionText(e.target.value)}
+                                  onKeyDown={e => { if (e.key === 'Enter') saveInterviewQuestionEdit(q.id); if (e.key === 'Escape') setEditingQuestionId(null) }}
+                                  className="border-[1.5px] border-[#800020] rounded-lg px-3 py-1.5 text-sm outline-none bg-white flex-1"
+                                  autoFocus
+                                />
+                                <button onClick={() => saveInterviewQuestionEdit(q.id)} className="border-none bg-[#800020] text-white text-xs px-2.5 py-1.5 rounded-md cursor-pointer font-semibold">저장</button>
+                                <button onClick={() => setEditingQuestionId(null)} className="border-[1.5px] border-gray-200 bg-white text-gray-500 text-xs px-2.5 py-1.5 rounded-md cursor-pointer">취소</button>
+                              </div>
+                            ) : (
+                              /* 수정 모드: 수정/삭제 버튼 */
+                              <div className="flex items-center gap-2 flex-1 py-0.5">
+                                <span className="text-sm text-gray-700 flex-1 leading-relaxed">{q.text}</span>
+                                <button onClick={() => { setEditingQuestionId(q.id); setEditingQuestionText(q.text) }} className="border-none bg-indigo-100 text-indigo-700 text-xs px-2 py-1 rounded cursor-pointer hover:bg-indigo-200" title="수정">✏️</button>
+                                <button onClick={() => deleteInterviewQuestion(q.id)} className="border-none bg-red-100 text-red-600 text-xs px-2 py-1 rounded cursor-pointer font-bold hover:bg-red-200" title="삭제">×</button>
+                              </div>
+                            )}
                           </div>
                         )
                       })}
