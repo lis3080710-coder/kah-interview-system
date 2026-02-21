@@ -58,6 +58,16 @@ const DEFAULT_SURPRISE_TOPICS = [
 const POSITIVE_TAGS = ["논리정연함", "자신감 있음", "준비 철저", "협업 마인드", "아이디어 우수", "높은 직무 이해도", "경청과 소통", "구체적 경험 제시", "성장 지향성"]
 const NEGATIVE_TAGS = ["소극적 태도", "동문서답", "근거 부족", "목소리 작음", "긴장함", "협업 우려", "방어적 태도"]
 
+const DEFAULT_INTERVIEW_QUESTIONS = [
+  "간단하게 자기소개를 해주세요.",
+  "우리 단체에 지원하게 된 동기가 무엇인가요?",
+  "본인의 강점과 약점을 솔직하게 말씀해주세요.",
+  "팀 프로젝트에서 어려움이 있었던 경험과 극복 방법을 말씀해주세요.",
+  "입단 후 본인이 기여할 수 있는 부분은 무엇인가요?",
+  "갈등 상황에서 어떻게 대처하시나요?",
+  "마지막으로 하고 싶으신 말씀이 있으시면 해주세요.",
+]
+
 // ─── Olympic Scoring Helper ────────────────────────────────────────────────────
 function calcDisplayScore(evaluations) {
   const n = evaluations.length
@@ -284,9 +294,9 @@ function EvaluationDetailsModal({ candidate, onClose, onUpdate, evalCategories }
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-[#800020] text-white flex items-center justify-center text-xs font-bold">{idx + 1}</div>
                 <div>
-                  <div className="text-xs text-gray-400 font-semibold mb-0.5">면접관 ID</div>
+                  <div className="text-xs text-gray-400 font-semibold mb-0.5">평가자 이름 (ID)</div>
                   <input
-                    className="text-xs text-[#1e3a5f] font-semibold font-mono border-[1.5px] border-gray-200 rounded-md px-2 py-1 bg-white outline-none focus:border-[#800020] w-44"
+                    className="text-xs text-[#1e3a5f] font-semibold border-[1.5px] border-gray-200 rounded-md px-2 py-1 bg-white outline-none focus:border-[#800020] w-44"
                     defaultValue={evaluation.interviewer_id}
                     onBlur={e => handleInterviewerIdChange(evaluation, e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
@@ -352,6 +362,10 @@ export default function InterviewSystem() {
   const [saving, setSaving] = useState(false)
   const [showDetailsModal, setShowDetailsModal] = useState(null)
   const [toast, setToast] = useState(null)
+  const [evaluatorName, setEvaluatorName] = useState(() => {
+    try { return localStorage.getItem('kah_evaluator_name') || '' } catch { return '' }
+  })
+  const [checkedQuestions, setCheckedQuestions] = useState(new Set())
   const fileRef = useRef()
 
   // ── 평가항목 편집 상태 ────────────────────────────────────────────────────
@@ -392,6 +406,7 @@ export default function InterviewSystem() {
 
   const total = Object.entries(currentScores).reduce((sum, [, v]) => sum + (Number(v) || 0), 0)
   const maxTotal = Object.values(dynamicMaxScores).reduce((a, b) => a + b, 0)
+  const effectiveInterviewerId = evaluatorName.trim() || interviewerId
 
   // ── 설정 영속성 ───────────────────────────────────────────────────────────
   const persistEvalCategories = async (cats) => {
@@ -520,6 +535,7 @@ export default function InterviewSystem() {
     setCurrentNote('')
     setSelectedCandidateId(null)
     setSelectedSurpriseTopics([])
+    setCheckedQuestions(new Set())
   }
 
   const loadEvaluationForCandidate = (candidateId, evalInterviewerId) => {
@@ -574,12 +590,13 @@ export default function InterviewSystem() {
   }
 
   const handleCandidateClick = (candidate) => {
-    if (!interviewerId) { showToast('면접관 ID가 설정되지 않았습니다.', 'error'); return }
-    loadEvaluationForCandidate(candidate.id, interviewerId)
+    if (!effectiveInterviewerId) { showToast('면접관 ID가 설정되지 않았습니다.', 'error'); return }
+    setCheckedQuestions(new Set())
+    loadEvaluationForCandidate(candidate.id, effectiveInterviewerId)
   }
 
   const saveEvaluation = async () => {
-    if (!currentCandidate || !interviewerId) { showToast('지원자를 선택해주세요.', 'error'); return }
+    if (!currentCandidate || !effectiveInterviewerId) { showToast('지원자를 선택해주세요.', 'error'); return }
     if (!currentCandidate.name?.trim()) { showToast('지원자 이름을 입력해주세요.', 'error'); return }
 
     try {
@@ -601,7 +618,7 @@ export default function InterviewSystem() {
 
       const { error } = await supabase.from('evaluations').upsert({
         candidate_id: candidateId,
-        interviewer_id: interviewerId,
+        interviewer_id: effectiveInterviewerId,
         scores: currentScores,
         total_score: total,
         tags: currentTags,
@@ -662,17 +679,38 @@ export default function InterviewSystem() {
 
   const deleteCandidate = async (candidateId) => {
     if (!confirm('이 지원자를 삭제하시겠습니까? 모든 평가 데이터가 함께 삭제됩니다.')) return
+
+    // 낙관적 UI 업데이트 — 삭제 버튼 클릭 즉시 목록에서 제거
+    setCandidates(prev => prev.filter(c => c.id !== candidateId))
+    if (selectedCandidateId === candidateId) resetCurrentEvaluation()
+
     try {
+      // 1단계: 평가 데이터 먼저 삭제 (외래 키 제약 대비)
       const { error: evalError } = await supabase.from('evaluations').delete().eq('candidate_id', candidateId)
-      if (evalError) throw evalError
+      if (evalError) {
+        console.error('Evaluation delete error:', evalError)
+        // 평가 삭제 실패해도 지원자 삭제는 시도 (CASCADE 설정 시 DB가 처리)
+      }
+      // 2단계: 지원자 삭제
       const { error: candError } = await supabase.from('candidates').delete().eq('id', candidateId)
-      if (candError) throw candError
-      if (selectedCandidateId === candidateId) resetCurrentEvaluation()
+      if (candError) {
+        // RLS DELETE 정책이 없는 경우 발생 — Supabase 대시보드에서 정책 추가 필요
+        // supabase-schema.sql 참고: "Anyone can delete candidates" 정책
+        console.error('Candidate delete error:', candError)
+        throw candError
+      }
       showToast('지원자가 삭제되었습니다.', 'success')
-      await fetchCandidates()
     } catch (error) {
       console.error('Error deleting candidate:', error)
-      showToast('삭제에 실패했습니다: ' + error.message, 'error')
+      const isRlsError = error.message?.includes('row-level security') || error.code === '42501'
+      showToast(
+        isRlsError
+          ? '삭제 권한이 없습니다. Supabase에서 DELETE 정책을 추가해주세요.'
+          : '삭제에 실패했습니다: ' + error.message,
+        'error'
+      )
+      // 실패 시 목록 복원
+      await fetchCandidates()
     }
   }
 
@@ -714,7 +752,11 @@ export default function InterviewSystem() {
         <KAHLogo />
         <Timer />
         <div className="flex gap-2 items-center">
-          {interviewerId && <div className="text-xs text-gray-400 mr-2">ID: {interviewerId.slice(-8)}</div>}
+          {(evaluatorName || interviewerId) && (
+            <div className="text-xs text-gray-400 mr-2">
+              평가자: <span className="font-semibold text-[#800020]">{evaluatorName || interviewerId?.slice(-8)}</span>
+            </div>
+          )}
           <button onClick={newCandidate} className="border-[1.5px] border-gray-200 rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer bg-white text-gray-600 hover:border-[#800020] hover:text-[#800020] transition-colors">
             + 신규 지원자
           </button>
@@ -959,6 +1001,25 @@ export default function InterviewSystem() {
                     </div>
                   </div>
 
+                  {/* ── 평가자 기입란 ─────────────────────────────────── */}
+                  <div className="mb-4 pb-4 border-b border-gray-100">
+                    <label className="text-xs font-semibold text-gray-400 tracking-wide block mb-1.5">✍️ 평가자 기입란</label>
+                    <input
+                      value={evaluatorName}
+                      onChange={e => {
+                        setEvaluatorName(e.target.value)
+                        try { localStorage.setItem('kah_evaluator_name', e.target.value) } catch {}
+                      }}
+                      placeholder="평가자 이름을 입력하세요 (예: 홍길동)"
+                      className="border-[1.5px] border-gray-200 rounded-lg px-3 py-2 text-sm outline-none text-gray-800 bg-gray-50 w-full focus:border-[#800020] focus:bg-white transition-colors"
+                    />
+                    {evaluatorName.trim() && (
+                      <div className="text-[11px] text-[#800020] mt-1 font-semibold">
+                        이 기기의 평가는 "{evaluatorName.trim()}" 이름으로 저장됩니다.
+                      </div>
+                    )}
+                  </div>
+
                   {isEditingEval && (
                     <div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 font-semibold">
                       ✏️ 항목명과 만점을 수정한 후 저장 버튼을 누르세요.
@@ -1041,6 +1102,68 @@ export default function InterviewSystem() {
                   </div>
                 </div>
               </div>
+
+              {/* ── 면접 질문 리스트 ──────────────────────────────────── */}
+              {(() => {
+                const surpriseQList = surpriseTopics.filter(t => selectedSurpriseTopics.includes(t.id)).map(t => ({ text: t.text, isSurprise: true }))
+                const allQuestions = [
+                  ...DEFAULT_INTERVIEW_QUESTIONS.map(q => ({ text: q, isSurprise: false })),
+                  ...surpriseQList,
+                ]
+                const doneCount = allQuestions.filter((_, i) => checkedQuestions.has(i)).length
+                return (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-6 mt-5 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm font-bold uppercase tracking-widest text-gray-500">📋 면접 질문 리스트</div>
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-[#800020]/10 text-[#800020]">
+                          {doneCount}/{allQuestions.length}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setCheckedQuestions(new Set())}
+                        className="border-[1.5px] border-gray-200 rounded-lg px-2.5 py-1 text-xs font-semibold cursor-pointer bg-white text-gray-500 hover:border-[#800020] hover:text-[#800020] transition-colors"
+                      >↺ 초기화</button>
+                    </div>
+                    <div>
+                      {allQuestions.map((q, i) => {
+                        const isChecked = checkedQuestions.has(i)
+                        return (
+                          <div key={i} className="flex items-start gap-3 py-2.5 border-b border-gray-100 last:border-0">
+                            <input
+                              type="checkbox"
+                              id={`q-${i}`}
+                              checked={isChecked}
+                              onChange={() => setCheckedQuestions(prev => {
+                                const next = new Set(prev)
+                                if (next.has(i)) next.delete(i)
+                                else next.add(i)
+                                return next
+                              })}
+                              className="mt-0.5 w-4 h-4 flex-shrink-0 cursor-pointer accent-[#800020]"
+                            />
+                            <label
+                              htmlFor={`q-${i}`}
+                              className="text-sm cursor-pointer flex-1 leading-relaxed"
+                              style={isChecked ? { textDecoration: 'line-through', color: '#9ca3af' } : { color: '#374151' }}
+                            >
+                              {q.isSurprise && (
+                                <span className="inline-flex items-center mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#800020]/10 text-[#800020]">돌발</span>
+                              )}
+                              {q.text}
+                            </label>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {doneCount === allQuestions.length && allQuestions.length > 0 && (
+                      <div className="mt-3 px-3 py-2 rounded-lg bg-green-50 border border-green-200 text-xs font-bold text-green-700">
+                        ✅ 모든 질문을 완료했습니다!
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               {/* ── 질적 피드백 ───────────────────────────────────────── */}
               <div className="bg-white rounded-2xl border border-gray-200 p-6 mt-5 shadow-sm">

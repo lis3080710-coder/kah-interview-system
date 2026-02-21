@@ -173,6 +173,11 @@ CREATE POLICY "Anyone can update candidates"
   ON candidates FOR UPDATE
   USING (true);
 
+-- Allow anyone to delete candidates (필수: 이 정책이 없으면 지원자 삭제 불가)
+CREATE POLICY "Anyone can delete candidates"
+  ON candidates FOR DELETE
+  USING (true);
+
 -- Allow anyone to view evaluations
 CREATE POLICY "Anyone can view evaluations"
   ON evaluations FOR SELECT
