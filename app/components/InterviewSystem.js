@@ -900,6 +900,21 @@ export default function InterviewSystem() {
                   </div>
                 </div>
                 <div className="flex gap-3 flex-wrap">{inputField("면접 일정", "schedule")}</div>
+
+                {/* ── 돌발 질문 ──────────────────────────────────────── */}
+                <div className="flex gap-3 mt-3 flex-wrap">
+                  <div className="flex flex-col gap-1 flex-1 min-w-full">
+                    <label className="text-xs font-semibold text-[#800020] tracking-wide">💡 돌발 질문</label>
+                    <textarea
+                      rows={2}
+                      value={currentCandidate?.info?.surpriseQuestion || ""}
+                      onChange={e => updateCandidateInfo("surpriseQuestion", e.target.value)}
+                      className="border-[1.5px] border-[#800020]/40 rounded-lg px-3 py-2 text-sm outline-none text-gray-800 resize-vertical min-h-[52px] leading-relaxed bg-red-50/40 focus:border-[#800020] focus:bg-white transition-colors"
+                      placeholder="돌발 질문 주제를 입력하세요."
+                      disabled={!currentCandidate}
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* ── 평가 항목 + 레이더 ────────────────────────────────── */}
