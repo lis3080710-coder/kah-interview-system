@@ -44,16 +44,6 @@ const DEFAULT_EVAL_CATEGORIES = [
   ]},
 ]
 
-const DEFAULT_SURPRISE_TOPICS = [
-  { id: 1, text: '조직문화 적응' },
-  { id: 2, text: '갈등 해결 경험' },
-  { id: 3, text: '리더십 경험' },
-  { id: 4, text: '실패 경험과 극복' },
-  { id: 5, text: '지원 동기' },
-  { id: 6, text: '향후 목표' },
-  { id: 7, text: '팀워크 경험' },
-  { id: 8, text: '스트레스 관리' },
-]
 
 const POSITIVE_TAGS = ["논리정연함", "자신감 있음", "준비 철저", "협업 마인드", "아이디어 우수", "높은 직무 이해도", "경청과 소통", "구체적 경험 제시", "성장 지향성"]
 const NEGATIVE_TAGS = ["소극적 태도", "동문서답", "근거 부족", "목소리 작음", "긴장함", "협업 우려", "방어적 태도"]
@@ -377,7 +367,6 @@ export default function InterviewSystem() {
   const [evaluatorName, setEvaluatorName] = useState(() => {
     try { return localStorage.getItem('kah_evaluator_name') || '' } catch { return '' }
   })
-  const [checkedQuestions, setCheckedQuestions] = useState(new Set())
   // ── 면접 질문 관리 상태 ────────────────────────────────────────────────────
   const [interviewQuestions, setInterviewQuestions] = useState(() => {
     try {
@@ -390,6 +379,9 @@ export default function InterviewSystem() {
   const [newQuestionText, setNewQuestionText] = useState('')
   const [editingQuestionId, setEditingQuestionId] = useState(null)
   const [editingQuestionText, setEditingQuestionText] = useState('')
+  // ── 지원자별 질문/체크 상태 맵 ────────────────────────────────────────────
+  // { [candidateId]: { questions: [...], checked: Set<id> } }
+  const [questionsByApplicant, setQuestionsByApplicant] = useState({})
   const fileRef = useRef()
 
   // ── 평가항목 편집 상태 ────────────────────────────────────────────────────
@@ -402,21 +394,6 @@ export default function InterviewSystem() {
   const [isEditingEval, setIsEditingEval] = useState(false)
   const [editEvalTemp, setEditEvalTemp] = useState(null)
   const [evalSaving, setEvalSaving] = useState(false)
-
-  // ── 돌발 질문 주제 상태 ───────────────────────────────────────────────────
-  const [surpriseTopicsOpen, setSurpriseTopicsOpen] = useState(false)
-  const [surpriseTopics, setSurpriseTopics] = useState(() => {
-    try {
-      const saved = localStorage.getItem('kah_surprise_topics')
-      return saved ? JSON.parse(saved) : DEFAULT_SURPRISE_TOPICS
-    } catch { return DEFAULT_SURPRISE_TOPICS }
-  })
-  const [selectedSurpriseTopics, setSelectedSurpriseTopics] = useState([])
-  const [isEditingSurpriseTopics, setIsEditingSurpriseTopics] = useState(false)
-  const [isAddingSurpriseTopic, setIsAddingSurpriseTopic] = useState(false)
-  const [newSurpriseTopicText, setNewSurpriseTopicText] = useState('')
-  const [editingSurpriseTopicId, setEditingSurpriseTopicId] = useState(null)
-  const [editingSurpriseTopicText, setEditingSurpriseTopicText] = useState('')
 
   // ── Toast ──────────────────────────────────────────────────────────────────
   const showToast = (message, type = 'success') => {
@@ -438,16 +415,6 @@ export default function InterviewSystem() {
     await saveSetting('eval_categories', cats)
   }
 
-  const persistSurpriseTopics = async (topics) => {
-    localStorage.setItem('kah_surprise_topics', JSON.stringify(topics))
-    await saveSetting('surprise_topics', topics)
-  }
-
-  const persistInterviewQuestions = async (questions) => {
-    localStorage.setItem('kah_interview_questions', JSON.stringify(questions))
-    await saveSetting('interview_questions', questions)
-  }
-
   // 앱 시작 시 Supabase에서 최신 설정 로드
   useEffect(() => {
     const loadSettings = async () => {
@@ -455,11 +422,6 @@ export default function InterviewSystem() {
       if (remoteCategories) {
         setEvalCategories(remoteCategories)
         localStorage.setItem('kah_eval_categories', JSON.stringify(remoteCategories))
-      }
-      const remoteTopics = await loadSetting('surprise_topics')
-      if (remoteTopics) {
-        setSurpriseTopics(remoteTopics)
-        localStorage.setItem('kah_surprise_topics', JSON.stringify(remoteTopics))
       }
       const remoteQuestions = await loadSetting('interview_questions')
       if (remoteQuestions) {
@@ -511,71 +473,51 @@ export default function InterviewSystem() {
     ))
   }
 
-  // ── 돌발 질문 핸들러 ──────────────────────────────────────────────────────
-  const toggleSurpriseTopic = async (id) => {
-    const next = selectedSurpriseTopics.includes(id)
-      ? selectedSurpriseTopics.filter(x => x !== id)
-      : [...selectedSurpriseTopics, id]
-    setSelectedSurpriseTopics(next)
-
-    if (currentCandidate && !currentCandidate.id.toString().startsWith('temp_')) {
-      const updatedInfo = { ...currentCandidate.info, surpriseTopics: next }
-      setCurrentCandidate(prev => ({ ...prev, info: updatedInfo }))
-      try {
-        await supabase.from('candidates').update({ info: updatedInfo }).eq('id', currentCandidate.id)
-      } catch (e) { console.error('surprise topic save error', e) }
-    }
-  }
-
-  const addSurpriseTopic = async () => {
-    if (!newSurpriseTopicText.trim()) return
-    const updated = [...surpriseTopics, { id: Date.now(), text: newSurpriseTopicText.trim() }]
-    setSurpriseTopics(updated)
-    await persistSurpriseTopics(updated)
-    setNewSurpriseTopicText('')
-    setIsAddingSurpriseTopic(false)
-  }
-
-  const saveSurpriseTopicEdit = async (id) => {
-    if (!editingSurpriseTopicText.trim()) return
-    const updated = surpriseTopics.map(t => t.id === id ? { ...t, text: editingSurpriseTopicText.trim() } : t)
-    setSurpriseTopics(updated)
-    await persistSurpriseTopics(updated)
-    setEditingSurpriseTopicId(null)
-    setEditingSurpriseTopicText('')
-  }
-
-  const deleteSurpriseTopic = async (id) => {
-    const updated = surpriseTopics.filter(t => t.id !== id)
-    setSurpriseTopics(updated)
-    await persistSurpriseTopics(updated)
-    setSelectedSurpriseTopics(prev => prev.filter(x => x !== id))
-  }
-
   // ── 면접 질문 핸들러 ──────────────────────────────────────────────────────
-  const addInterviewQuestion = async () => {
-    if (!newQuestionText.trim()) return
-    const updated = [...interviewQuestions, { id: Date.now(), text: newQuestionText.trim() }]
-    setInterviewQuestions(updated)
-    await persistInterviewQuestions(updated)
+  const addInterviewQuestion = () => {
+    if (!newQuestionText.trim() || !selectedCandidateId) return
+    const newQ = { id: Date.now(), text: newQuestionText.trim() }
+    setQuestionsByApplicant(prev => {
+      const cur = prev[selectedCandidateId]
+      if (!cur) return prev
+      return { ...prev, [selectedCandidateId]: { ...cur, questions: [...cur.questions, newQ] } }
+    })
     setNewQuestionText('')
     setIsAddingQuestion(false)
   }
 
-  const saveInterviewQuestionEdit = async (id) => {
-    if (!editingQuestionText.trim()) return
-    const updated = interviewQuestions.map(q => q.id === id ? { ...q, text: editingQuestionText.trim() } : q)
-    setInterviewQuestions(updated)
-    await persistInterviewQuestions(updated)
+  const saveInterviewQuestionEdit = (id) => {
+    if (!editingQuestionText.trim() || !selectedCandidateId) return
+    setQuestionsByApplicant(prev => {
+      const cur = prev[selectedCandidateId]
+      if (!cur) return prev
+      return {
+        ...prev,
+        [selectedCandidateId]: {
+          ...cur,
+          questions: cur.questions.map(q => q.id === id ? { ...q, text: editingQuestionText.trim() } : q)
+        }
+      }
+    })
     setEditingQuestionId(null)
     setEditingQuestionText('')
   }
 
-  const deleteInterviewQuestion = async (id) => {
-    const updated = interviewQuestions.filter(q => q.id !== id)
-    setInterviewQuestions(updated)
-    await persistInterviewQuestions(updated)
-    setCheckedQuestions(new Set())
+  const deleteInterviewQuestion = (id) => {
+    if (!selectedCandidateId) return
+    setQuestionsByApplicant(prev => {
+      const cur = prev[selectedCandidateId]
+      if (!cur) return prev
+      const nextChecked = new Set(cur.checked)
+      nextChecked.delete(id)
+      return {
+        ...prev,
+        [selectedCandidateId]: {
+          questions: cur.questions.filter(q => q.id !== id),
+          checked: nextChecked
+        }
+      }
+    })
   }
 
   // ── 기타 핸들러 ───────────────────────────────────────────────────────────
@@ -594,8 +536,6 @@ export default function InterviewSystem() {
     setCurrentTags([])
     setCurrentNote('')
     setSelectedCandidateId(null)
-    setSelectedSurpriseTopics([])
-    setCheckedQuestions(new Set())
   }
 
   const loadEvaluationForCandidate = (candidateId, evalInterviewerId) => {
@@ -604,9 +544,6 @@ export default function InterviewSystem() {
 
     const myEvaluation = candidate.evaluations?.find(e => e.interviewer_id === evalInterviewerId)
     const defaultScores = { sincerity: 0, cooperation: 0, planning: 0, expression: 0, commonsense: 0, proactivity: 0, personality: 0, q1: 0, q2: 0, comprehension: 0, logic: 0, creativity: 0 }
-
-    // 저장된 돌발 질문 선택 복원
-    setSelectedSurpriseTopics(candidate.info?.surpriseTopics || [])
 
     setSelectedCandidateId(candidateId)
     setCurrentCandidate(candidate)
@@ -665,7 +602,14 @@ export default function InterviewSystem() {
 
   const handleCandidateClick = (candidate) => {
     if (!effectiveInterviewerId) { showToast('면접관 ID가 설정되지 않았습니다.', 'error'); return }
-    setCheckedQuestions(new Set())
+    // 지원자별 질문 상태가 없으면 글로벌 템플릿으로 초기화
+    setQuestionsByApplicant(prev => {
+      if (prev[candidate.id]) return prev
+      return { ...prev, [candidate.id]: { questions: [...interviewQuestions], checked: new Set() } }
+    })
+    setIsEditingQuestions(false)
+    setIsAddingQuestion(false)
+    setEditingQuestionId(null)
     loadEvaluationForCandidate(candidate.id, effectiveInterviewerId)
   }
 
@@ -676,18 +620,24 @@ export default function InterviewSystem() {
     try {
       setSaving(true)
       let candidateId = currentCandidate.id
-      const infoWithSurprise = { ...currentCandidate.info, surpriseTopics: selectedSurpriseTopics }
 
       if (currentCandidate.id.toString().startsWith('temp_')) {
         const { data: newCandidate, error: createError } = await supabase
-          .from('candidates').insert({ name: currentCandidate.name, info: infoWithSurprise }).select().single()
+          .from('candidates').insert({ name: currentCandidate.name, info: currentCandidate.info }).select().single()
         if (createError) throw createError
         candidateId = newCandidate.id
-        setCurrentCandidate({ ...currentCandidate, id: candidateId, info: infoWithSurprise })
+        setCurrentCandidate({ ...currentCandidate, id: candidateId })
         setSelectedCandidateId(candidateId)
+        // 질문 상태를 temp ID → 실제 ID로 이전
+        setQuestionsByApplicant(prev => {
+          const tempData = prev[currentCandidate.id]
+          if (!tempData) return prev
+          const next = { ...prev, [candidateId]: tempData }
+          delete next[currentCandidate.id]
+          return next
+        })
       } else {
-        await supabase.from('candidates').update({ info: infoWithSurprise }).eq('id', candidateId)
-        setCurrentCandidate(prev => ({ ...prev, info: infoWithSurprise }))
+        await supabase.from('candidates').update({ info: currentCandidate.info }).eq('id', candidateId)
       }
 
       const { error } = await supabase.from('evaluations').upsert({
@@ -749,6 +699,14 @@ export default function InterviewSystem() {
     }
     setCurrentCandidate(tempCandidate)
     setSelectedCandidateId(tempCandidate.id)
+    // 신규 지원자에게도 기본 질문 리스트 초기화
+    setQuestionsByApplicant(prev => ({
+      ...prev,
+      [tempCandidate.id]: { questions: [...interviewQuestions], checked: new Set() }
+    }))
+    setIsEditingQuestions(false)
+    setIsAddingQuestion(false)
+    setEditingQuestionId(null)
   }
 
   const deleteCandidate = async (candidateId) => {
@@ -942,109 +900,6 @@ export default function InterviewSystem() {
                   </div>
                 </div>
                 <div className="flex gap-3 flex-wrap">{inputField("면접 일정", "schedule")}</div>
-
-                {/* ── 돌발 질문 토글 ─────────────────────────────────── */}
-                <div className="mt-4 pt-4 border-t border-gray-100">
-                  <div className="flex items-center justify-between">
-                    {/* 토글 버튼 */}
-                    <button
-                      onClick={() => setSurpriseTopicsOpen(v => !v)}
-                      className="flex items-center gap-2 bg-transparent border-none cursor-pointer text-sm font-bold text-[#1e3a5f] p-0"
-                    >
-                      <span className="text-gray-400 text-xs transition-transform duration-200" style={{ display: 'inline-block', transform: surpriseTopicsOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
-                      💡 돌발 질문 주제
-                      {selectedSurpriseTopics.length > 0 && (
-                        <span className="bg-[#800020] text-white text-[11px] font-bold px-2 py-0.5 rounded-full">{selectedSurpriseTopics.length}개 선택</span>
-                      )}
-                    </button>
-
-                    {/* 수정 / 추가 버튼 */}
-                    <div className="flex gap-1.5">
-                      <button
-                        onClick={() => { setIsEditingSurpriseTopics(v => !v); setEditingSurpriseTopicId(null); if (!surpriseTopicsOpen) setSurpriseTopicsOpen(true) }}
-                        className="border-[1.5px] border-gray-200 rounded-md px-2.5 py-1 text-xs font-semibold cursor-pointer bg-white text-gray-600 hover:border-[#800020] hover:text-[#800020] transition-colors"
-                      >
-                        {isEditingSurpriseTopics ? '✓ 완료' : '✏️ 수정'}
-                      </button>
-                      <button
-                        onClick={() => { setSurpriseTopicsOpen(true); setIsAddingSurpriseTopic(true); setNewSurpriseTopicText('') }}
-                        className="border-none rounded-md px-2.5 py-1 text-xs font-semibold cursor-pointer bg-[#800020] text-white hover:opacity-85 transition-opacity"
-                      >
-                        + 추가
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* 주제 목록 */}
-                  {surpriseTopicsOpen && (
-                    <div className="mt-3">
-                      <div className="flex flex-wrap gap-1.5 mb-2">
-                        {surpriseTopics.map(topic => (
-                          <div key={topic.id} className="inline-flex items-center gap-1">
-                            {isEditingSurpriseTopics ? (
-                              editingSurpriseTopicId === topic.id ? (
-                                <div className="flex items-center gap-1.5">
-                                  <input
-                                    value={editingSurpriseTopicText}
-                                    onChange={e => setEditingSurpriseTopicText(e.target.value)}
-                                    onKeyDown={e => { if (e.key === 'Enter') saveSurpriseTopicEdit(topic.id); if (e.key === 'Escape') setEditingSurpriseTopicId(null) }}
-                                    className="border-[1.5px] border-[#800020] rounded-lg px-2 py-1 text-xs outline-none bg-white w-28"
-                                    autoFocus
-                                  />
-                                  <button onClick={() => saveSurpriseTopicEdit(topic.id)} className="border-none bg-[#800020] text-white text-xs px-2 py-1 rounded-md cursor-pointer font-semibold">저장</button>
-                                  <button onClick={() => setEditingSurpriseTopicId(null)} className="border-[1.5px] border-gray-200 bg-white text-gray-500 text-xs px-2 py-1 rounded-md cursor-pointer">취소</button>
-                                </div>
-                              ) : (
-                                <div className="inline-flex items-center gap-1">
-                                  <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 border border-gray-200 text-gray-600">{topic.text}</span>
-                                  <button onClick={() => { setEditingSurpriseTopicId(topic.id); setEditingSurpriseTopicText(topic.text) }} className="border-none bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded cursor-pointer" title="수정">✏️</button>
-                                  <button onClick={() => deleteSurpriseTopic(topic.id)} className="border-none bg-red-100 text-red-600 text-xs px-1.5 py-0.5 rounded cursor-pointer font-bold" title="삭제">×</button>
-                                </div>
-                              )
-                            ) : (
-                              <button
-                                onClick={() => toggleSurpriseTopic(topic.id)}
-                                className={`px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
-                                  selectedSurpriseTopics.includes(topic.id)
-                                    ? 'border-[#800020] bg-red-50 text-[#800020] shadow-sm'
-                                    : 'border-gray-200 bg-gray-50 text-gray-500 hover:border-[#800020]/50'
-                                }`}
-                              >
-                                {selectedSurpriseTopics.includes(topic.id) && '✓ '}{topic.text}
-                              </button>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* 새 주제 추가 */}
-                      {isAddingSurpriseTopic && (
-                        <div className="flex gap-1.5 mt-2">
-                          <input
-                            value={newSurpriseTopicText}
-                            onChange={e => setNewSurpriseTopicText(e.target.value)}
-                            placeholder="새 돌발 질문 주제 입력..."
-                            className="border-[1.5px] border-gray-200 rounded-lg px-3 py-1.5 text-xs outline-none bg-gray-50 flex-1 focus:border-[#800020] focus:bg-white"
-                            onKeyDown={e => { if (e.key === 'Enter') addSurpriseTopic(); if (e.key === 'Escape') setIsAddingSurpriseTopic(false) }}
-                            autoFocus
-                          />
-                          <button onClick={addSurpriseTopic} className="border-none bg-[#800020] text-white text-xs px-3 py-1.5 rounded-lg cursor-pointer font-semibold hover:opacity-85">추가</button>
-                          <button onClick={() => setIsAddingSurpriseTopic(false)} className="border-[1.5px] border-gray-200 bg-white text-gray-500 text-xs px-3 py-1.5 rounded-lg cursor-pointer">취소</button>
-                        </div>
-                      )}
-
-                      {/* 선택 요약 */}
-                      {selectedSurpriseTopics.length > 0 && !isEditingSurpriseTopics && (
-                        <div className="mt-2 px-3 py-2 rounded-lg bg-red-50 border border-red-100">
-                          <span className="text-xs font-bold text-[#800020]">선택된 주제: </span>
-                          <span className="text-xs text-[#800020]/80">
-                            {surpriseTopics.filter(t => selectedSurpriseTopics.includes(t.id)).map(t => t.text).join(' · ')}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
               </div>
 
               {/* ── 평가 항목 + 레이더 ────────────────────────────────── */}
@@ -1177,24 +1032,39 @@ export default function InterviewSystem() {
                 </div>
               </div>
 
-              {/* ── 면접 질문 리스트 ──────────────────────────────────── */}
+              {/* ── 면접 질문 리스트 (지원자별 독립) ─────────────────── */}
               {(() => {
-                const surpriseQList = surpriseTopics
-                  .filter(t => selectedSurpriseTopics.includes(t.id))
-                  .map(t => ({ id: t.id, text: t.text, isSurprise: true }))
-                const allQuestions = [
-                  ...interviewQuestions.map(q => ({ ...q, isSurprise: false })),
-                  ...surpriseQList,
-                ]
-                const getKey = (q) => q.isSurprise ? `s${q.id}` : q.id
-                const doneCount = allQuestions.filter(q => checkedQuestions.has(getKey(q))).length
+                const qData = selectedCandidateId ? (questionsByApplicant[selectedCandidateId] ?? null) : null
+                const displayQuestions = qData?.questions ?? []
+                const checkedQuestions = qData?.checked ?? new Set()
+                const doneCount = displayQuestions.filter(q => checkedQuestions.has(q.id)).length
+
+                const toggleCheck = (qId) => {
+                  setQuestionsByApplicant(prev => {
+                    const cur = prev[selectedCandidateId]
+                    if (!cur) return prev
+                    const next = new Set(cur.checked)
+                    if (next.has(qId)) next.delete(qId)
+                    else next.add(qId)
+                    return { ...prev, [selectedCandidateId]: { ...cur, checked: next } }
+                  })
+                }
+
+                const resetChecked = () => {
+                  setQuestionsByApplicant(prev => {
+                    const cur = prev[selectedCandidateId]
+                    if (!cur) return prev
+                    return { ...prev, [selectedCandidateId]: { ...cur, checked: new Set() } }
+                  })
+                }
+
                 return (
                   <div className="bg-white rounded-2xl border border-gray-200 p-6 mt-5 shadow-sm">
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-2">
                         <div className="text-sm font-bold uppercase tracking-widest text-gray-500">📋 면접 질문 리스트</div>
                         <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-[#800020]/10 text-[#800020]">
-                          {doneCount}/{allQuestions.length}
+                          {doneCount}/{displayQuestions.length}
                         </span>
                       </div>
                       <div className="flex gap-1.5">
@@ -1207,13 +1077,12 @@ export default function InterviewSystem() {
                           className="border-none rounded-md px-2.5 py-1 text-xs font-semibold cursor-pointer bg-[#800020] text-white hover:opacity-85 transition-opacity"
                         >+ 추가</button>
                         <button
-                          onClick={() => setCheckedQuestions(new Set())}
+                          onClick={resetChecked}
                           className="border-[1.5px] border-gray-200 rounded-lg px-2.5 py-1 text-xs font-semibold cursor-pointer bg-white text-gray-500 hover:border-gray-400 transition-colors"
                         >↺ 초기화</button>
                       </div>
                     </div>
 
-                    {/* 새 질문 추가 입력 */}
                     {isAddingQuestion && (
                       <div className="flex gap-1.5 mb-3">
                         <input
@@ -1230,39 +1099,28 @@ export default function InterviewSystem() {
                     )}
 
                     <div>
-                      {allQuestions.map((q) => {
-                        const questionKey = getKey(q)
-                        const isChecked = checkedQuestions.has(questionKey)
+                      {displayQuestions.map((q) => {
+                        const isChecked = checkedQuestions.has(q.id)
                         return (
-                          <div key={questionKey} className="flex items-start gap-3 py-2.5 border-b border-gray-100 last:border-0">
-                            {(!isEditingQuestions || q.isSurprise) ? (
-                              /* 체크박스 모드 */
+                          <div key={q.id} className="flex items-start gap-3 py-2.5 border-b border-gray-100 last:border-0">
+                            {!isEditingQuestions ? (
                               <>
                                 <input
                                   type="checkbox"
-                                  id={`q-${questionKey}`}
+                                  id={`q-${q.id}`}
                                   checked={isChecked}
-                                  onChange={() => setCheckedQuestions(prev => {
-                                    const next = new Set(prev)
-                                    if (next.has(questionKey)) next.delete(questionKey)
-                                    else next.add(questionKey)
-                                    return next
-                                  })}
+                                  onChange={() => toggleCheck(q.id)}
                                   className="mt-0.5 w-4 h-4 flex-shrink-0 cursor-pointer accent-[#800020]"
                                 />
                                 <label
-                                  htmlFor={`q-${questionKey}`}
+                                  htmlFor={`q-${q.id}`}
                                   className="text-sm cursor-pointer flex-1 leading-relaxed"
                                   style={isChecked ? { textDecoration: 'line-through', color: '#9ca3af' } : { color: '#374151' }}
                                 >
-                                  {q.isSurprise && (
-                                    <span className="inline-flex items-center mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#800020]/10 text-[#800020]">돌발</span>
-                                  )}
                                   {q.text}
                                 </label>
                               </>
                             ) : editingQuestionId === q.id ? (
-                              /* 인라인 편집 모드 */
                               <div className="flex items-center gap-1.5 flex-1">
                                 <input
                                   value={editingQuestionText}
@@ -1275,7 +1133,6 @@ export default function InterviewSystem() {
                                 <button onClick={() => setEditingQuestionId(null)} className="border-[1.5px] border-gray-200 bg-white text-gray-500 text-xs px-2.5 py-1.5 rounded-md cursor-pointer">취소</button>
                               </div>
                             ) : (
-                              /* 수정 모드: 수정/삭제 버튼 */
                               <div className="flex items-center gap-2 flex-1 py-0.5">
                                 <span className="text-sm text-gray-700 flex-1 leading-relaxed">{q.text}</span>
                                 <button onClick={() => { setEditingQuestionId(q.id); setEditingQuestionText(q.text) }} className="border-none bg-indigo-100 text-indigo-700 text-xs px-2 py-1 rounded cursor-pointer hover:bg-indigo-200" title="수정">✏️</button>
@@ -1286,7 +1143,7 @@ export default function InterviewSystem() {
                         )
                       })}
                     </div>
-                    {doneCount === allQuestions.length && allQuestions.length > 0 && (
+                    {doneCount === displayQuestions.length && displayQuestions.length > 0 && (
                       <div className="mt-3 px-3 py-2 rounded-lg bg-green-50 border border-green-200 text-xs font-bold text-green-700">
                         ✅ 모든 질문을 완료했습니다!
                       </div>
