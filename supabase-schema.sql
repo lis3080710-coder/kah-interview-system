@@ -202,8 +202,14 @@ CREATE POLICY "Anyone can delete evaluations"
 -- 8. REALTIME PUBLICATION
 -- Enable realtime subscriptions for live updates
 -- ========================================
--- Note: Enable Realtime in Supabase Dashboard under Database > Publications
--- or run: ALTER PUBLICATION supabase_realtime ADD TABLE evaluations, candidates;
+-- IMPORTANT: Run the following in the Supabase SQL Editor (Dashboard > SQL Editor)
+-- to enable real-time sync for candidates and evaluations tables:
+--
+--   ALTER PUBLICATION supabase_realtime ADD TABLE candidates;
+--   ALTER PUBLICATION supabase_realtime ADD TABLE evaluations;
+--
+-- Alternatively, go to Supabase Dashboard > Database > Publications > supabase_realtime
+-- and add both tables there.
 
 -- ========================================
 -- 9. SAMPLE DATA (OPTIONAL - FOR TESTING)

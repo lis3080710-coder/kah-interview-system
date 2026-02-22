@@ -97,6 +97,19 @@ async function saveSetting(key, value) {
   } catch { /* silent fail */ }
 }
 
+// ─── SVG Icon Components ──────────────────────────────────────────────────────
+const IconPlus = ({ size = 14 }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 20 20" fill="currentColor">
+    <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
+  </svg>
+)
+
+const IconTrash = ({ size = 13 }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 20 20" fill="currentColor">
+    <path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.519.149.022a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C9.327 4.025 10.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z" clipRule="evenodd" />
+  </svg>
+)
+
 // ─── KAH Logo Component ───────────────────────────────────────────────────────
 const KAHLogo = () => (
   <div className="flex items-center gap-2">
@@ -415,6 +428,25 @@ export default function InterviewSystem() {
     await saveSetting('eval_categories', cats)
   }
 
+  // ── 지원자별 질문 DB 저장 ──────────────────────────────────────────────────
+  const saveQuestionsForCandidate = async (candidateId, questions, checkedSet) => {
+    if (!candidateId || String(candidateId).startsWith('temp_')) return
+    const candidate = candidates.find(c => c.id === candidateId) || currentCandidate
+    if (!candidate) return
+    const updatedInfo = {
+      ...candidate.info,
+      questions,
+      questionsChecked: Array.from(checkedSet),
+    }
+    try {
+      await supabase.from('candidates').update({ info: updatedInfo }).eq('id', candidateId)
+      setCandidates(prev => prev.map(c => c.id === candidateId ? { ...c, info: updatedInfo } : c))
+      setCurrentCandidate(prev => prev?.id === candidateId ? { ...prev, info: updatedInfo } : prev)
+    } catch (err) {
+      console.error('Error saving questions to DB:', err)
+    }
+  }
+
   // 앱 시작 시 Supabase에서 최신 설정 로드
   useEffect(() => {
     const loadSettings = async () => {
@@ -473,51 +505,104 @@ export default function InterviewSystem() {
     ))
   }
 
+  const addEditTempItem = (catId) => {
+    const newField = `item_${Date.now()}`
+    setEditEvalTemp(prev => prev.map(cat =>
+      cat.id === catId
+        ? { ...cat, items: [...cat.items, { field: newField, label: '새 항목', max: 3 }] }
+        : cat
+    ))
+  }
+
+  const deleteEditTempItem = (catId, field) => {
+    if (!confirm('이 소항목을 삭제하시겠습니까?')) return
+    setEditEvalTemp(prev => prev.map(cat =>
+      cat.id === catId
+        ? { ...cat, items: cat.items.filter(item => item.field !== field) }
+        : cat
+    ))
+  }
+
+  const deleteEditTempCat = (catId) => {
+    if (!confirm('이 대항목 전체를 삭제하시겠습니까?\n포함된 소항목도 모두 삭제됩니다.')) return
+    setEditEvalTemp(prev => prev.filter(cat => cat.id !== catId))
+  }
+
+  const addEditTempCat = () => {
+    const newId = `cat_${Date.now()}`
+    setEditEvalTemp(prev => [
+      ...prev,
+      { id: newId, label: '새 대항목', items: [{ field: `item_${Date.now()}`, label: '새 항목', max: 3 }] },
+    ])
+  }
+
   // ── 면접 질문 핸들러 ──────────────────────────────────────────────────────
-  const addInterviewQuestion = () => {
+  const addInterviewQuestion = async () => {
     if (!newQuestionText.trim() || !selectedCandidateId) return
+    const cur = questionsByApplicant[selectedCandidateId]
+    if (!cur) return
     const newQ = { id: Date.now(), text: newQuestionText.trim() }
-    setQuestionsByApplicant(prev => {
-      const cur = prev[selectedCandidateId]
-      if (!cur) return prev
-      return { ...prev, [selectedCandidateId]: { ...cur, questions: [...cur.questions, newQ] } }
-    })
+    const updatedQuestions = [...cur.questions, newQ]
+    setQuestionsByApplicant(prev => ({
+      ...prev,
+      [selectedCandidateId]: { ...cur, questions: updatedQuestions },
+    }))
     setNewQuestionText('')
     setIsAddingQuestion(false)
+    await saveQuestionsForCandidate(selectedCandidateId, updatedQuestions, cur.checked)
   }
 
-  const saveInterviewQuestionEdit = (id) => {
+  const saveInterviewQuestionEdit = async (id) => {
     if (!editingQuestionText.trim() || !selectedCandidateId) return
-    setQuestionsByApplicant(prev => {
-      const cur = prev[selectedCandidateId]
-      if (!cur) return prev
-      return {
-        ...prev,
-        [selectedCandidateId]: {
-          ...cur,
-          questions: cur.questions.map(q => q.id === id ? { ...q, text: editingQuestionText.trim() } : q)
-        }
-      }
-    })
+    const cur = questionsByApplicant[selectedCandidateId]
+    if (!cur) return
+    const updatedQuestions = cur.questions.map(q => q.id === id ? { ...q, text: editingQuestionText.trim() } : q)
+    setQuestionsByApplicant(prev => ({
+      ...prev,
+      [selectedCandidateId]: { ...cur, questions: updatedQuestions },
+    }))
     setEditingQuestionId(null)
     setEditingQuestionText('')
+    await saveQuestionsForCandidate(selectedCandidateId, updatedQuestions, cur.checked)
   }
 
-  const deleteInterviewQuestion = (id) => {
+  const deleteInterviewQuestion = async (id) => {
     if (!selectedCandidateId) return
-    setQuestionsByApplicant(prev => {
-      const cur = prev[selectedCandidateId]
-      if (!cur) return prev
-      const nextChecked = new Set(cur.checked)
-      nextChecked.delete(id)
-      return {
-        ...prev,
-        [selectedCandidateId]: {
-          questions: cur.questions.filter(q => q.id !== id),
-          checked: nextChecked
-        }
-      }
-    })
+    const cur = questionsByApplicant[selectedCandidateId]
+    if (!cur) return
+    const nextChecked = new Set(cur.checked)
+    nextChecked.delete(id)
+    const updatedQuestions = cur.questions.filter(q => q.id !== id)
+    setQuestionsByApplicant(prev => ({
+      ...prev,
+      [selectedCandidateId]: { questions: updatedQuestions, checked: nextChecked },
+    }))
+    await saveQuestionsForCandidate(selectedCandidateId, updatedQuestions, nextChecked)
+  }
+
+  const toggleCheck = async (qId) => {
+    if (!selectedCandidateId) return
+    const cur = questionsByApplicant[selectedCandidateId]
+    if (!cur) return
+    const next = new Set(cur.checked)
+    if (next.has(qId)) next.delete(qId)
+    else next.add(qId)
+    setQuestionsByApplicant(prev => ({
+      ...prev,
+      [selectedCandidateId]: { ...prev[selectedCandidateId], checked: next },
+    }))
+    await saveQuestionsForCandidate(selectedCandidateId, cur.questions, next)
+  }
+
+  const resetChecked = async () => {
+    if (!selectedCandidateId) return
+    const cur = questionsByApplicant[selectedCandidateId]
+    if (!cur) return
+    setQuestionsByApplicant(prev => ({
+      ...prev,
+      [selectedCandidateId]: { ...prev[selectedCandidateId], checked: new Set() },
+    }))
+    await saveQuestionsForCandidate(selectedCandidateId, cur.questions, new Set())
   }
 
   // ── 기타 핸들러 ───────────────────────────────────────────────────────────
@@ -575,6 +660,26 @@ export default function InterviewSystem() {
     return () => { supabase.removeChannel(channel) }
   }, [])
 
+  // ── Supabase Realtime — candidates 테이블 면접 질문 실시간 동기화 ──────────
+  useEffect(() => {
+    const channel = supabase
+      .channel('candidate_questions_realtime')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'candidates' }, (payload) => {
+        const updated = payload.new
+        if (!updated?.info?.questions) return
+        const newQuestions = updated.info.questions
+        const newChecked = new Set(updated.info.questionsChecked || [])
+        setQuestionsByApplicant(prev => {
+          if (!prev[updated.id]) return prev
+          return { ...prev, [updated.id]: { questions: newQuestions, checked: newChecked } }
+        })
+        setCandidates(prev => prev.map(c => c.id === updated.id ? { ...c, info: updated.info, name: updated.name } : c))
+        setCurrentCandidate(prev => prev?.id === updated.id ? { ...prev, info: updated.info } : prev)
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [])
+
   const fetchCandidates = async () => {
     try {
       setLoading(true)
@@ -602,11 +707,32 @@ export default function InterviewSystem() {
 
   const handleCandidateClick = (candidate) => {
     if (!effectiveInterviewerId) { showToast('면접관 ID가 설정되지 않았습니다.', 'error'); return }
-    // 지원자별 질문 상태가 없으면 글로벌 템플릿으로 초기화
-    setQuestionsByApplicant(prev => {
-      if (prev[candidate.id]) return prev
-      return { ...prev, [candidate.id]: { questions: [...interviewQuestions], checked: new Set() } }
-    })
+    // 이미 로드된 질문 상태가 없을 때만 초기화
+    if (!questionsByApplicant[candidate.id]) {
+      if (candidate.info?.questions) {
+        // DB에 저장된 질문이 있으면 그것을 사용
+        setQuestionsByApplicant(prev => ({
+          ...prev,
+          [candidate.id]: {
+            questions: candidate.info.questions,
+            checked: new Set(candidate.info.questionsChecked || []),
+          },
+        }))
+      } else {
+        // DB에 질문이 없으면 글로벌 템플릿으로 초기화하고 DB에 저장
+        const initialQuestions = [...interviewQuestions]
+        setQuestionsByApplicant(prev => ({
+          ...prev,
+          [candidate.id]: { questions: initialQuestions, checked: new Set() },
+        }))
+        if (!String(candidate.id).startsWith('temp_')) {
+          const updatedInfo = { ...candidate.info, questions: initialQuestions, questionsChecked: [] }
+          supabase.from('candidates').update({ info: updatedInfo }).eq('id', candidate.id).then(() => {
+            setCandidates(prev => prev.map(c => c.id === candidate.id ? { ...c, info: updatedInfo } : c))
+          }).catch(console.error)
+        }
+      }
+    }
     setIsEditingQuestions(false)
     setIsAddingQuestion(false)
     setEditingQuestionId(null)
@@ -622,11 +748,15 @@ export default function InterviewSystem() {
       let candidateId = currentCandidate.id
 
       if (currentCandidate.id.toString().startsWith('temp_')) {
+        const tempQuestions = questionsByApplicant[currentCandidate.id]
+        const infoWithQuestions = tempQuestions
+          ? { ...currentCandidate.info, questions: tempQuestions.questions, questionsChecked: Array.from(tempQuestions.checked) }
+          : currentCandidate.info
         const { data: newCandidate, error: createError } = await supabase
-          .from('candidates').insert({ name: currentCandidate.name, info: currentCandidate.info }).select().single()
+          .from('candidates').insert({ name: currentCandidate.name, info: infoWithQuestions }).select().single()
         if (createError) throw createError
         candidateId = newCandidate.id
-        setCurrentCandidate({ ...currentCandidate, id: candidateId })
+        setCurrentCandidate({ ...currentCandidate, id: candidateId, info: infoWithQuestions })
         setSelectedCandidateId(candidateId)
         // 질문 상태를 temp ID → 실제 ID로 이전
         setQuestionsByApplicant(prev => {
@@ -975,17 +1105,38 @@ export default function InterviewSystem() {
                     const catMax = cat.items.reduce((s, i) => s + i.max, 0)
                     return (
                       <div key={cat.id}>
+                        {/* 대항목 헤더 */}
                         <div className={`flex items-center gap-2 text-sm font-bold text-[#1e3a5f] mb-1.5 ${catIdx === 0 ? 'pt-1' : 'pt-3'}`}>
                           {isEditingEval ? (
-                            <input
-                              value={cat.label}
-                              onChange={e => updateEditTempCatLabel(cat.id, e.target.value)}
-                              className="border-[1.5px] border-gray-200 rounded-lg px-2 py-1 text-sm font-bold outline-none focus:border-[#800020] w-28"
-                            />
-                          ) : <span>{cat.label}</span>}
-                          <span className="text-gray-400 font-medium text-xs">({catMax}점 만점)</span>
+                            <>
+                              <input
+                                value={cat.label}
+                                onChange={e => updateEditTempCatLabel(cat.id, e.target.value)}
+                                className="border-[1.5px] border-gray-200 rounded-lg px-2 py-1 text-sm font-bold outline-none focus:border-[#800020] w-28"
+                              />
+                              <span className="text-gray-400 font-medium text-xs flex-1">({catMax}점 만점)</span>
+                              {/* 소항목 추가 */}
+                              <button
+                                onClick={() => addEditTempItem(cat.id)}
+                                title="소항목 추가"
+                                className="flex items-center justify-center w-6 h-6 rounded-md bg-[#800020]/10 text-[#800020] hover:bg-[#800020] hover:text-white transition-colors border-none cursor-pointer"
+                              ><IconPlus size={13} /></button>
+                              {/* 대항목 삭제 */}
+                              <button
+                                onClick={() => deleteEditTempCat(cat.id)}
+                                title="대항목 삭제"
+                                className="flex items-center justify-center w-6 h-6 rounded-md bg-red-50 text-red-400 hover:bg-red-500 hover:text-white transition-colors border-none cursor-pointer"
+                              ><IconTrash size={13} /></button>
+                            </>
+                          ) : (
+                            <>
+                              <span>{cat.label}</span>
+                              <span className="text-gray-400 font-medium text-xs">({catMax}점 만점)</span>
+                            </>
+                          )}
                         </div>
 
+                        {/* 소항목 목록 */}
                         {cat.items.map(item => (
                           isEditingEval ? (
                             <div key={item.field} className="flex items-center py-2 border-b border-gray-100 gap-2">
@@ -1002,6 +1153,12 @@ export default function InterviewSystem() {
                                 className="w-14 border-[1.5px] border-gray-200 rounded-lg px-2 py-1.5 text-xs text-center outline-none focus:border-[#800020] bg-gray-50"
                               />
                               <span className="text-xs text-gray-400">점</span>
+                              {/* 소항목 삭제 */}
+                              <button
+                                onClick={() => deleteEditTempItem(cat.id, item.field)}
+                                title="소항목 삭제"
+                                className="flex items-center justify-center w-6 h-6 rounded-md bg-red-50 text-red-400 hover:bg-red-500 hover:text-white transition-colors border-none cursor-pointer flex-shrink-0"
+                              ><IconTrash size={12} /></button>
                             </div>
                           ) : (
                             <ScoreInput key={item.field} label={item.label} field={item.field} scores={currentScores} max={item.max} onChange={updateScore} />
@@ -1010,6 +1167,17 @@ export default function InterviewSystem() {
                       </div>
                     )
                   })}
+
+                  {/* 새로운 대항목 추가 버튼 */}
+                  {isEditingEval && (
+                    <button
+                      onClick={addEditTempCat}
+                      className="mt-4 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 border-dashed border-[#800020]/30 text-[#800020] text-xs font-bold hover:border-[#800020] hover:bg-[#800020]/5 transition-all cursor-pointer bg-transparent"
+                    >
+                      <IconPlus size={15} />
+                      새로운 대항목 추가
+                    </button>
+                  )}
 
                   {/* Total */}
                   <div className="bg-[#800020] rounded-xl p-4 mt-4 flex items-center justify-between text-white">
@@ -1047,31 +1215,12 @@ export default function InterviewSystem() {
                 </div>
               </div>
 
-              {/* ── 면접 질문 리스트 (지원자별 독립) ─────────────────── */}
+              {/* ── 면접 질문 리스트 (지원자별 실시간 동기화) ────────── */}
               {(() => {
                 const qData = selectedCandidateId ? (questionsByApplicant[selectedCandidateId] ?? null) : null
                 const displayQuestions = qData?.questions ?? []
                 const checkedQuestions = qData?.checked ?? new Set()
                 const doneCount = displayQuestions.filter(q => checkedQuestions.has(q.id)).length
-
-                const toggleCheck = (qId) => {
-                  setQuestionsByApplicant(prev => {
-                    const cur = prev[selectedCandidateId]
-                    if (!cur) return prev
-                    const next = new Set(cur.checked)
-                    if (next.has(qId)) next.delete(qId)
-                    else next.add(qId)
-                    return { ...prev, [selectedCandidateId]: { ...cur, checked: next } }
-                  })
-                }
-
-                const resetChecked = () => {
-                  setQuestionsByApplicant(prev => {
-                    const cur = prev[selectedCandidateId]
-                    if (!cur) return prev
-                    return { ...prev, [selectedCandidateId]: { ...cur, checked: new Set() } }
-                  })
-                }
 
                 return (
                   <div className="bg-white rounded-2xl border border-gray-200 p-6 mt-5 shadow-sm">
