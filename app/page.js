@@ -10,6 +10,10 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const router = useRouter()
 
+  // ── PWA 설치 관련 상태 ─────────────────────────────────────────────────────
+  const [deferredPrompt, setDeferredPrompt] = useState(null)
+  const [installState, setInstallState] = useState('hidden') // 'hidden' | 'android' | 'ios'
+
   const VALID_ID = 'kgukah'
   const VALID_PW = 'kah2026'
 
@@ -20,6 +24,40 @@ export default function LoginPage() {
       router.replace('/dashboard')
     }
   }, [router])
+
+  // PWA 설치 프롬프트 감지
+  useEffect(() => {
+    // 이미 설치된 경우 (standalone 모드) 배너 숨김
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true
+    if (isStandalone) return
+
+    // iOS 감지 (Safari에서는 beforeinstallprompt가 없음)
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream
+    if (isIOS) {
+      setInstallState('ios')
+      return
+    }
+
+    // Android/Chrome: beforeinstallprompt 이벤트 캐치
+    const handler = (e) => {
+      e.preventDefault()
+      setDeferredPrompt(e)
+      setInstallState('android')
+    }
+    window.addEventListener('beforeinstallprompt', handler)
+    return () => window.removeEventListener('beforeinstallprompt', handler)
+  }, [])
+
+  const handleInstall = async () => {
+    if (!deferredPrompt) return
+    deferredPrompt.prompt()
+    const { outcome } = await deferredPrompt.userChoice
+    if (outcome === 'accepted') {
+      setInstallState('hidden')
+      setDeferredPrompt(null)
+    }
+  }
 
   const handleLogin = (e) => {
     e.preventDefault()
@@ -46,7 +84,7 @@ export default function LoginPage() {
       {/* ───────────── Left: Login Form ───────────── */}
       <div className="flex flex-col justify-center items-center w-full md:w-1/2 bg-white px-6 sm:px-10 lg:px-20">
         {/* Logo / Brand */}
-        <div className="mb-10 text-center">
+        <div className="mb-8 text-center">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4 shadow-lg" style={{ backgroundColor: '#800020' }}>
             <svg className="w-9 h-9 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -110,7 +148,42 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <p className="mt-8 text-xs text-gray-400">
+        {/* ── PWA 앱 설치 배너 ─────────────────────────────────────────────── */}
+        {installState !== 'hidden' && (
+          <div className="mt-6 w-full max-w-sm rounded-2xl border border-[#800020]/20 bg-red-50/60 p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-base">📲</span>
+              <span className="text-xs font-bold text-[#800020]">앱으로 설치하기</span>
+            </div>
+
+            {installState === 'android' && (
+              <button
+                onClick={handleInstall}
+                className="w-full py-2.5 rounded-xl text-white text-sm font-semibold shadow-sm transition active:scale-95"
+                style={{ backgroundColor: '#800020' }}
+              >
+                홈 화면에 앱 추가
+              </button>
+            )}
+
+            {installState === 'ios' && (
+              <p className="text-xs text-gray-600 leading-relaxed">
+                Safari 하단의{' '}
+                <span className="inline-flex items-center gap-0.5 font-bold text-[#800020]">
+                  공유
+                  {/* iOS share icon */}
+                  <svg className="w-3.5 h-3.5 inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" />
+                  </svg>
+                </span>{' '}
+                버튼을 누른 후,{' '}
+                <strong className="text-[#800020]">홈 화면에 추가</strong>를 선택하세요.
+              </p>
+            )}
+          </div>
+        )}
+
+        <p className="mt-6 text-xs text-gray-400">
           © 2025 KAH Interview System. All rights reserved.
         </p>
       </div>

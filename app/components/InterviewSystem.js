@@ -1390,6 +1390,15 @@ export default function InterviewSystem() {
         />
       )}
 
+      {/* 모바일 전용 FAB - 신규 지원자 추가 */}
+      <button
+        className="md:hidden fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-[#800020] text-white text-3xl font-light shadow-xl flex items-center justify-center active:scale-95 transition-transform"
+        onClick={newCandidate}
+        title="신규 지원자 추가"
+      >
+        +
+      </button>
+
       {/* Toast Notification */}
       {toast && (
         <div className={`fixed top-20 right-5 z-[9999] px-6 py-4 rounded-xl shadow-2xl text-sm font-semibold min-w-[300px] ${toast.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'}`}
