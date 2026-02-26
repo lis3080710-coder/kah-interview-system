@@ -273,7 +273,7 @@ function EvaluationDetailsModal({ candidate, onClose, onUpdate, evalCategories }
 
   return (
     <div className="fixed inset-0 bg-black/50 z-[1000] flex items-center justify-center p-5" onClick={onClose}>
-      <div className="bg-white rounded-2xl p-8 max-w-2xl w-full max-h-[80vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl p-5 sm:p-8 max-w-2xl w-full max-h-[85vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-6">
           <div>
             <h2 className="text-xl font-extrabold text-[#1e3a5f] mb-1">{candidate.name} - 평가 상세</h2>
@@ -377,6 +377,7 @@ export default function InterviewSystem() {
   const [saving, setSaving] = useState(false)
   const [showDetailsModal, setShowDetailsModal] = useState(null)
   const [toast, setToast] = useState(null)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [evaluatorName, setEvaluatorName] = useState(() => {
     try { return localStorage.getItem('kah_evaluator_name') || '' } catch { return '' }
   })
@@ -910,31 +911,43 @@ export default function InterviewSystem() {
   return (
     <div className="font-sans bg-gray-50 min-h-screen text-gray-800">
       {/* ── STICKY HEADER ─────────────────────────────────────────── */}
-      <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-xl border-b border-gray-200 px-6 h-16 flex items-center justify-between shadow-sm">
-        <KAHLogo />
-        <Timer />
-        <div className="flex gap-2 items-center">
+      <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-xl border-b border-gray-200 px-3 sm:px-6 min-h-[4rem] flex items-center justify-between shadow-sm flex-wrap gap-y-1 py-2">
+        <div className="flex items-center gap-2">
+          <KAHLogo />
+          {/* 모바일 전용: 순위 사이드바 토글 버튼 */}
+          <button
+            className="md:hidden border-[1.5px] border-gray-200 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-gray-600 hover:border-[#800020] hover:text-[#800020] transition-colors"
+            onClick={() => setSidebarOpen(v => !v)}
+          >
+            🏆 {sidebarOpen ? '닫기' : '순위'}
+          </button>
+        </div>
+        {/* 타이머: 데스크탑에서만 표시 */}
+        <div className="hidden md:block">
+          <Timer />
+        </div>
+        <div className="flex gap-1.5 items-center flex-wrap">
           {(evaluatorName || interviewerId) && (
-            <div className="text-xs text-gray-400 mr-2">
+            <div className="hidden sm:block text-xs text-gray-400 mr-1">
               평가자: <span className="font-semibold text-[#800020]">{evaluatorName || interviewerId?.slice(-8)}</span>
             </div>
           )}
-          <button onClick={newCandidate} className="border-[1.5px] border-gray-200 rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer bg-white text-gray-600 hover:border-[#800020] hover:text-[#800020] transition-colors">
-            + 신규 지원자
+          <button onClick={newCandidate} className="hidden sm:inline-flex border-[1.5px] border-gray-200 rounded-lg px-3 py-2 text-xs font-semibold cursor-pointer bg-white text-gray-600 hover:border-[#800020] hover:text-[#800020] transition-colors">
+            + 신규
           </button>
-          <button onClick={saveEvaluation} className="border-none rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer bg-[#800020] text-white shadow-md hover:opacity-90 transition-all">
-            {saving ? '저장 중...' : '✓ 평가 저장'}
+          <button onClick={saveEvaluation} className="border-none rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold cursor-pointer bg-[#800020] text-white shadow-md hover:opacity-90 transition-all">
+            {saving ? '저장 중...' : '✓ 저장'}
           </button>
           <button onClick={() => { sessionStorage.removeItem('kah_auth'); router.push('/') }}
-            className="border-[1.5px] border-red-200 rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer bg-white text-red-500 hover:bg-red-50 hover:border-red-400 transition-colors">
+            className="border-[1.5px] border-red-200 rounded-lg px-2.5 py-2 text-xs font-semibold cursor-pointer bg-white text-red-500 hover:bg-red-50 hover:border-red-400 transition-colors">
             로그아웃
           </button>
         </div>
       </header>
 
-      <div className="flex items-start">
-        {/* ── STICKY SIDEBAR ────────────────────────────────────────── */}
-        <aside className="w-64 flex-shrink-0 sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto bg-white border-r border-gray-200 p-5">
+      <div className="flex flex-col md:flex-row items-start">
+        {/* ── SIDEBAR (데스크탑: 고정 사이드바 / 모바일: 토글 패널) ── */}
+        <aside className={`flex-shrink-0 bg-white border-gray-200 md:w-64 md:sticky md:top-16 md:h-[calc(100vh-4rem)] md:overflow-y-auto md:border-r md:p-5 ${sidebarOpen ? 'w-full border-b p-4' : 'hidden md:block'}`}>
           <div className="text-xs font-bold text-gray-500 tracking-widest uppercase mb-4">🏆 실시간 순위 (평균)</div>
 
           {loading && <div className="text-sm text-gray-400 text-center mt-5">로딩 중...</div>}
@@ -977,7 +990,7 @@ export default function InterviewSystem() {
         </aside>
 
         {/* ── MAIN CONTENT ──────────────────────────────────────────── */}
-        <main className="flex-1 p-6 max-w-4xl">
+        <main className="flex-1 p-3 sm:p-6 max-w-4xl w-full">
           {/* PDF Upload */}
           {!currentCandidate && (
             <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-5 shadow-sm">
@@ -1050,7 +1063,7 @@ export default function InterviewSystem() {
               {/* ── 평가 항목 + 레이더 ────────────────────────────────── */}
               <div className="flex gap-5 flex-wrap">
                 {/* 평가 항목 */}
-                <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm flex-1 min-w-[320px]">
+                <div className="bg-white rounded-2xl border border-gray-200 p-4 sm:p-6 shadow-sm flex-1 min-w-[280px]">
                   {/* 헤더 */}
                   <div className="flex items-center justify-between mb-4">
                     <div className="text-sm font-bold uppercase tracking-widest text-gray-500">📊 평가 항목</div>
@@ -1356,9 +1369,9 @@ export default function InterviewSystem() {
               </div>
 
               {/* Bottom actions */}
-              <div className="flex gap-3 justify-end mb-10 mt-5">
-                <button onClick={newCandidate} className="border-[1.5px] border-gray-200 rounded-lg px-4 py-2 text-sm font-semibold cursor-pointer bg-white text-gray-600 hover:border-[#800020] hover:text-[#800020] transition-colors">새 지원자</button>
-                <button onClick={saveEvaluation} className="border-none rounded-lg px-7 py-2.5 text-sm font-semibold cursor-pointer bg-[#800020] text-white shadow-md hover:opacity-90 transition-all">
+              <div className="flex gap-3 justify-end mb-10 mt-5 flex-wrap">
+                <button onClick={newCandidate} className="border-[1.5px] border-gray-200 rounded-lg px-4 py-2.5 text-sm font-semibold cursor-pointer bg-white text-gray-600 hover:border-[#800020] hover:text-[#800020] transition-colors flex-1 sm:flex-none">새 지원자</button>
+                <button onClick={saveEvaluation} className="border-none rounded-lg px-7 py-2.5 text-sm font-semibold cursor-pointer bg-[#800020] text-white shadow-md hover:opacity-90 transition-all flex-1 sm:flex-none text-center">
                   {saving ? '저장 중...' : '✓ 평가 저장 & 순위 반영'}
                 </button>
               </div>

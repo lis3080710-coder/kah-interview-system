@@ -44,7 +44,7 @@ export default function LoginPage() {
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       {/* ───────────── Left: Login Form ───────────── */}
-      <div className="flex flex-col justify-center items-center w-full md:w-1/2 bg-white px-10 lg:px-20">
+      <div className="flex flex-col justify-center items-center w-full md:w-1/2 bg-white px-6 sm:px-10 lg:px-20">
         {/* Logo / Brand */}
         <div className="mb-10 text-center">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4 shadow-lg" style={{ backgroundColor: '#800020' }}>
