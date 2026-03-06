@@ -771,22 +771,54 @@ export default function InterviewSystem() {
         await supabase.from('candidates').update({ info: currentCandidate.info }).eq('id', candidateId)
       }
 
-      const { error } = await supabase.from('evaluations').upsert({
-        candidate_id: candidateId,
-        interviewer_id: effectiveInterviewerId,
-        scores: currentScores,
-        total_score: total,
-        tags: currentTags,
-        note: currentNote,
-      }, { onConflict: 'candidate_id,interviewer_id' })
+      // total_score는 반드시 정수로 저장 (INTEGER 컬럼)
+      const totalScoreInt = Math.round(total)
 
-      if (error) throw error
+      // upsert 대신 SELECT → INSERT or UPDATE 방식으로 처리
+      // (onConflict 유니크 제약 의존 없이 안정적으로 동작)
+      const { data: existing, error: selectError } = await supabase
+        .from('evaluations')
+        .select('id')
+        .eq('candidate_id', candidateId)
+        .eq('interviewer_id', effectiveInterviewerId)
+        .maybeSingle()
+
+      if (selectError) throw selectError
+
+      if (existing) {
+        // 기존 평가 업데이트
+        const { error: updateError } = await supabase
+          .from('evaluations')
+          .update({
+            scores: currentScores,
+            total_score: totalScoreInt,
+            tags: currentTags,
+            note: currentNote,
+          })
+          .eq('id', existing.id)
+        if (updateError) throw updateError
+      } else {
+        // 새 평가 삽입
+        const { error: insertError } = await supabase
+          .from('evaluations')
+          .insert({
+            candidate_id: candidateId,
+            interviewer_id: effectiveInterviewerId,
+            scores: currentScores,
+            total_score: totalScoreInt,
+            tags: currentTags,
+            note: currentNote,
+          })
+        if (insertError) throw insertError
+      }
 
       showToast('✅ 평가가 저장되었습니다!', 'success')
       await fetchCandidates()
     } catch (error) {
       console.error('Error saving evaluation:', error)
-      showToast('평가 저장에 실패했습니다: ' + error.message, 'error')
+      // 에러 상세 정보 표시 (code + message)
+      const detail = error?.code ? `[${error.code}] ${error.message}` : (error?.message || String(error))
+      showToast('평가 저장에 실패했습니다: ' + detail, 'error')
     } finally {
       setSaving(false)
     }
