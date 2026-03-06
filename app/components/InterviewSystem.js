@@ -700,7 +700,13 @@ export default function InterviewSystem() {
       setCandidates(candidatesWithScores)
     } catch (error) {
       console.error('Error fetching candidates:', error)
-      showToast('데이터를 불러오는데 실패했습니다: ' + error.message, 'error')
+      const isFetchError = error?.message === 'Failed to fetch' || error?.message?.includes('fetch')
+      showToast(
+        isFetchError
+          ? '⚠️ Supabase 연결 실패 — 대시보드에서 프로젝트가 일시정지 상태인지 확인하세요.'
+          : '데이터를 불러오는데 실패했습니다: ' + (error?.code ? `[${error.code}] ` : '') + error.message,
+        'error'
+      )
     } finally {
       setLoading(false)
     }
