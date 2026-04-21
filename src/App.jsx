@@ -65,7 +65,6 @@ const createSupabaseClient = (url, key) => {
     }),
   });
 
-  // settings 전용: key 기반 upsert / select
   const settings = {
     get: async (key) => {
       try {
@@ -106,15 +105,15 @@ const KAHLogo = () => (
   <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
     <div style={{
       width: 40, height: 40, borderRadius: 10,
-      background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
+      background: "linear-gradient(135deg, #7f1d1d 0%, #dc2626 100%)",
       display: "flex", alignItems: "center", justifyContent: "center",
-      boxShadow: "0 4px 12px rgba(37,99,235,0.4)",
+      boxShadow: "0 4px 12px rgba(220,38,38,0.4)",
       flexShrink: 0
     }}>
       <span style={{ color: "#fff", fontWeight: 900, fontSize: 14, letterSpacing: -0.5, fontFamily: "'Georgia', serif" }}>KAH</span>
     </div>
     <div>
-      <div style={{ color: "#1e3a5f", fontWeight: 800, fontSize: 15, letterSpacing: -0.3, lineHeight: 1.1 }}>KAH Interview</div>
+      <div style={{ color: "#7f1d1d", fontWeight: 800, fontSize: 15, letterSpacing: -0.3, lineHeight: 1.1 }}>KAH Interview</div>
       <div style={{ color: "#64748b", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>Evaluation System</div>
     </div>
   </div>
@@ -226,7 +225,7 @@ const S = {
   },
   maxLabel: { fontSize: 11, color: "#94a3b8", minWidth: 50 },
   totalBox: {
-    background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
+    background: "linear-gradient(135deg, #7f1d1d 0%, #dc2626 100%)",
     borderRadius: 12, padding: "16px 20px",
     display: "flex", alignItems: "center", justifyContent: "space-between",
     color: "#fff", marginTop: 16,
@@ -237,14 +236,14 @@ const S = {
     transition: "all 0.15s",
   },
   primaryBtn: {
-    background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
-    color: "#fff", boxShadow: "0 2px 8px rgba(37,99,235,0.3)",
+    background: "linear-gradient(135deg, #7f1d1d 0%, #dc2626 100%)",
+    color: "#fff", boxShadow: "0 2px 8px rgba(220,38,38,0.3)",
   },
   rankItem: (isActive) => ({
     display: "flex", alignItems: "center", gap: 8,
     padding: "10px 12px", borderRadius: 10, marginBottom: 6,
-    background: isActive ? "#eff6ff" : "#f8fafc",
-    border: isActive ? "1.5px solid #bfdbfe" : "1.5px solid transparent",
+    background: isActive ? "#fef2f2" : "#f8fafc",
+    border: isActive ? "1.5px solid #fecaca" : "1.5px solid transparent",
     cursor: "pointer", transition: "all 0.15s",
   }),
   rankBadge: (rank) => ({
@@ -277,11 +276,11 @@ const S = {
     transition: "all 0.15s",
   }),
   dropZone: (dragging) => ({
-    border: `2px dashed ${dragging ? "#2563eb" : "#cbd5e1"}`,
+    border: `2px dashed ${dragging ? "#dc2626" : "#cbd5e1"}`,
     borderRadius: 12,
     padding: "32px",
     textAlign: "center",
-    background: dragging ? "#eff6ff" : "#f8fafc",
+    background: dragging ? "#fef2f2" : "#f8fafc",
     cursor: "pointer",
     transition: "all 0.2s",
   }),
@@ -293,7 +292,7 @@ const S = {
   smallPrimaryBtn: {
     border: "none", borderRadius: 6, padding: "4px 10px",
     fontSize: 11, fontWeight: 600, cursor: "pointer",
-    background: "#2563eb", color: "#fff", transition: "all 0.15s",
+    background: "#dc2626", color: "#fff", transition: "all 0.15s",
   },
   smallDangerBtn: {
     border: "none", borderRadius: 6, padding: "4px 8px",
@@ -386,7 +385,7 @@ function Timer() {
       ) : (
         <div style={{
           fontSize: 22, fontWeight: 800, letterSpacing: 2, minWidth: 80, textAlign: "center",
-          color: isDone ? "#22c55e" : isWarning ? "#ef4444" : "#1e3a5f",
+          color: isDone ? "#22c55e" : isWarning ? "#ef4444" : "#7f1d1d",
           animation: isWarning && running ? "pulse 1s infinite" : "none",
         }}>
           {String(displayMin).padStart(2, "0")}:{String(displaySec).padStart(2, "0")}
@@ -419,7 +418,7 @@ function CompetencyRadar({ scores, evalCategories }) {
         <PolarGrid stroke="#e2e8f0" />
         <PolarAngleAxis dataKey="subject" tick={{ fontSize: 11, fill: "#64748b", fontWeight: 600 }} />
         <PolarRadiusAxis angle={90} domain={[0, 100]} tick={{ fontSize: 9, fill: "#94a3b8" }} tickCount={5} />
-        <Radar name="역량" dataKey="value" stroke="#2563eb" fill="#3b82f6" fillOpacity={0.25} strokeWidth={2} dot={{ fill: "#2563eb", r: 3 }} />
+        <Radar name="역량" dataKey="value" stroke="#dc2626" fill="#ef4444" fillOpacity={0.25} strokeWidth={2} dot={{ fill: "#dc2626", r: 3 }} />
         <Tooltip formatter={(v) => `${v}%`} />
       </RadarChart>
     </ResponsiveContainer>
@@ -454,7 +453,7 @@ function EvaluationDetailsModal({ candidate, onClose, evalCategories }) {
       }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
           <div>
-            <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1e3a5f", marginBottom: 4 }}>
+            <h2 style={{ fontSize: 20, fontWeight: 800, color: "#7f1d1d", marginBottom: 4 }}>
               {candidate.name} - 평가 상세
             </h2>
             <p style={{ fontSize: 13, color: "#64748b" }}>
@@ -469,7 +468,7 @@ function EvaluationDetailsModal({ candidate, onClose, evalCategories }) {
 
         <div style={{ marginBottom: 24 }}>
           <div style={{
-            background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
+            background: "linear-gradient(135deg, #7f1d1d 0%, #dc2626 100%)",
             borderRadius: 12, padding: "16px 20px", color: "#fff",
             display: "flex", justifyContent: "space-between", alignItems: "center",
           }}>
@@ -499,7 +498,7 @@ function EvaluationDetailsModal({ candidate, onClose, evalCategories }) {
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <div style={{
                   width: 32, height: 32, borderRadius: 8,
-                  background: "#2563eb", color: "#fff",
+                  background: "#dc2626", color: "#fff",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontSize: 12, fontWeight: 700,
                 }}>
@@ -507,12 +506,12 @@ function EvaluationDetailsModal({ candidate, onClose, evalCategories }) {
                 </div>
                 <div>
                   <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>면접관 ID</div>
-                  <div style={{ fontSize: 12, color: "#1e3a5f", fontWeight: 600, fontFamily: "monospace" }}>
+                  <div style={{ fontSize: 12, color: "#7f1d1d", fontWeight: 600, fontFamily: "monospace" }}>
                     {evaluation.interviewer_id.slice(-12)}
                   </div>
                 </div>
               </div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: "#2563eb" }}>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#dc2626" }}>
                 {evaluation.total_score}점
               </div>
             </div>
@@ -526,7 +525,7 @@ function EvaluationDetailsModal({ candidate, onClose, evalCategories }) {
                   <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>
                     {labelMap[key] || key}
                   </span>
-                  <span style={{ fontSize: 12, color: "#1e3a5f", fontWeight: 700 }}>{value}</span>
+                  <span style={{ fontSize: 12, color: "#7f1d1d", fontWeight: 700 }}>{value}</span>
                 </div>
               ))}
             </div>
@@ -569,7 +568,6 @@ export default function App() {
   const [selectedCohort, setSelectedCohort] = useState(null);
   const [cohorts, setCohorts] = useState([6, 7, 8]);
 
-  // State management
   const [selectedCandidateId, setSelectedCandidateId] = useState(null);
   const [currentCandidate, setCurrentCandidate] = useState(null);
   const [currentScores, setCurrentScores] = useState({
@@ -626,7 +624,6 @@ export default function App() {
     await supabase.settings.set('surprise_topics', topics);
   };
 
-  // 앱 시작 시 Supabase에서 설정 로드 (localStorage 덮어쓰기)
   useEffect(() => {
     const loadSettings = async () => {
       const remoteCategories = await supabase.settings.get('eval_categories');
@@ -696,7 +693,6 @@ export default function App() {
       : [...selectedSurpriseTopics, id];
     setSelectedSurpriseTopics(next);
 
-    // 현재 지원자가 있으면 candidates.info에 바로 저장
     if (currentCandidate && !currentCandidate.id.toString().startsWith('temp_')) {
       const updatedInfo = { ...currentCandidate.info, surpriseTopics: next };
       setCurrentCandidate(prev => ({ ...prev, info: updatedInfo }));
@@ -780,7 +776,6 @@ export default function App() {
       q1: 0, q2: 0, comprehension: 0, logic: 0, creativity: 0,
     };
 
-    // candidates.info에 저장된 돌발 질문 선택 복원
     const savedSurpriseTopics = candidate.info?.surpriseTopics || [];
     setSelectedSurpriseTopics(savedSurpriseTopics);
 
@@ -807,6 +802,24 @@ export default function App() {
   useEffect(() => {
     if (selectedCohort !== null) fetchCandidates();
   }, [selectedCohort]);
+
+  // 탭 포커스 복귀 시 자동 리페치
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && selectedCohort !== null) {
+        fetchCandidates();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [selectedCohort]);
+
+  // 30초마다 자동 리페치 (인터뷰 화면)
+  useEffect(() => {
+    if (view !== 'interview' || selectedCohort === null) return;
+    const interval = setInterval(() => fetchCandidates(), 30000);
+    return () => clearInterval(interval);
+  }, [view, selectedCohort]);
 
   const fetchCandidates = async () => {
     try {
@@ -868,7 +881,6 @@ export default function App() {
 
       let candidateId = currentCandidate.id;
 
-      // 지원자 info에 선택된 돌발 질문 포함
       const infoWithSurprise = { ...currentCandidate.info, surpriseTopics: selectedSurpriseTopics };
 
       if (currentCandidate.id.toString().startsWith('temp_')) {
@@ -884,7 +896,6 @@ export default function App() {
         setCurrentCandidate({ ...currentCandidate, id: candidateId, info: infoWithSurprise });
         setSelectedCandidateId(candidateId);
       } else {
-        // 기존 지원자도 info 업데이트
         await supabase.from('candidates').update({ info: infoWithSurprise }).eq('id', candidateId).execute();
         setCurrentCandidate(prev => ({ ...prev, info: infoWithSurprise }));
       }
@@ -1005,14 +1016,13 @@ export default function App() {
           onChange={e => updateCandidateInfo(field, e.target.value)}
           placeholder={label}
           disabled={!currentCandidate}
-          onFocus={e => { e.target.style.borderColor = "#2563eb"; e.target.style.background = "#fff"; }}
+          onFocus={e => { e.target.style.borderColor = "#dc2626"; e.target.style.background = "#fff"; }}
           onBlur={e => { e.target.style.borderColor = "#e2e8f0"; e.target.style.background = "#fafbfc"; }}
         />
       </div>
     );
   };
 
-  // 현재 편집 중인 카테고리 데이터 가져오기
   const displayCategories = isEditingEval ? editEvalTemp : evalCategories;
 
   // ─── 로그인 / 기수 선택 핸들러 ───────────────────────────────────────────
@@ -1063,74 +1073,161 @@ export default function App() {
         input[type=number]::-webkit-inner-spin-button { opacity: 1; }
         ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
         @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+        @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
         .tag-btn:hover { filter: brightness(0.92); transform: scale(0.97); }
-        .rank-item:hover { background: #e0e7ff !important; }
+        .rank-item:hover { background: #fee2e2 !important; }
         .finalize-btn:hover { opacity: 0.88; transform: translateY(-1px); }
-        .new-btn:hover { border-color: #2563eb; color: #2563eb; }
-        .small-btn:hover { border-color: #2563eb; color: #2563eb; }
+        .new-btn:hover { border-color: #dc2626; color: #dc2626; }
+        .small-btn:hover { border-color: #dc2626; color: #dc2626; }
         .small-primary-btn:hover { opacity: 0.85; }
         .topic-chip:hover { filter: brightness(0.95); }
-        .cohort-card:hover { transform: translateY(-4px); box-shadow: 0 12px 32px rgba(37,99,235,0.18) !important; border-color: #2563eb !important; }
+        .cohort-card:hover { transform: translateY(-4px); box-shadow: 0 12px 32px rgba(220,38,38,0.18) !important; border-color: #dc2626 !important; }
         .cohort-card:active { transform: translateY(-1px); }
         .login-btn:hover { opacity: 0.88; transform: translateY(-1px); }
-        .add-cohort-btn:hover { border-color: #2563eb; color: #2563eb; background: #eff6ff !important; }
-        .logout-btn:hover { color: #ef4444; border-color: #ef4444; }
+        .add-cohort-btn:hover { border-color: #dc2626; color: #dc2626; background: #fef2f2 !important; }
+        .logout-btn:hover { color: #dc2626; border-color: #dc2626; }
         .back-btn:hover { background: #f1f5f9 !important; }
+        .refresh-btn:hover { background: #fef2f2 !important; border-color: #dc2626 !important; color: #dc2626 !important; }
       `}</style>
 
       {/* ─── 로그인 화면 ───────────────────────────────────────────────────── */}
       {view === 'login' && (
         <div style={{
-          minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'linear-gradient(135deg, #f0f4f8 0%, #e8eef7 100%)',
+          minHeight: '100vh',
+          display: 'flex',
+          background: '#fff',
         }}>
+          {/* Left branding panel */}
           <div style={{
-            background: '#fff', borderRadius: 24, padding: '48px 40px', width: 400,
-            boxShadow: '0 8px 40px rgba(37,99,235,0.12)', border: '1px solid #e2e8f0',
+            width: '44%',
+            background: 'linear-gradient(160deg, #7f1d1d 0%, #dc2626 100%)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '60px 48px',
+            position: 'relative',
+            overflow: 'hidden',
           }}>
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 28 }}>
-              <KAHLogo />
+            <div style={{
+              position: 'absolute', top: -100, right: -100,
+              width: 360, height: 360, borderRadius: '50%',
+              background: 'rgba(255,255,255,0.05)',
+              pointerEvents: 'none',
+            }} />
+            <div style={{
+              position: 'absolute', bottom: -80, left: -80,
+              width: 280, height: 280, borderRadius: '50%',
+              background: 'rgba(255,255,255,0.05)',
+              pointerEvents: 'none',
+            }} />
+            <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', animation: 'fadeIn 0.5s ease' }}>
+              <div style={{
+                width: 80, height: 80, borderRadius: 22,
+                background: 'rgba(255,255,255,0.15)',
+                backdropFilter: 'blur(10px)',
+                border: '1.5px solid rgba(255,255,255,0.25)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                margin: '0 auto 28px',
+                boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+              }}>
+                <span style={{ color: '#fff', fontWeight: 900, fontSize: 24, fontFamily: "'Georgia', serif" }}>KAH</span>
+              </div>
+              <h1 style={{ color: '#fff', fontSize: 30, fontWeight: 900, marginBottom: 10, letterSpacing: -0.5 }}>
+                KAH Interview
+              </h1>
+              <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 48 }}>
+                Evaluation System
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14, textAlign: 'left' }}>
+                {['실시간 평균 점수 집계', '다중 평가자 지원', '기수별 평가 관리'].map(text => (
+                  <div key={text} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{
+                      width: 22, height: 22, borderRadius: 7,
+                      background: 'rgba(255,255,255,0.18)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0,
+                    }}>
+                      <span style={{ color: '#fff', fontSize: 12, fontWeight: 700 }}>✓</span>
+                    </div>
+                    <span style={{ color: 'rgba(255,255,255,0.88)', fontSize: 14, fontWeight: 500 }}>{text}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-            <h2 style={{ fontSize: 22, fontWeight: 800, color: '#1e3a5f', textAlign: 'center', marginBottom: 6 }}>
-              면접관 로그인
-            </h2>
-            <p style={{ fontSize: 13, color: '#94a3b8', textAlign: 'center', marginBottom: 32 }}>
-              이름을 입력하고 평가 시스템에 접속하세요
-            </p>
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ fontSize: 12, fontWeight: 700, color: '#64748b', display: 'block', marginBottom: 6 }}>
-                면접관 이름
-              </label>
-              <input
+          </div>
+
+          {/* Right form panel */}
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '48px',
+            background: '#fafafa',
+          }}>
+            <div style={{ width: '100%', maxWidth: 380, animation: 'fadeIn 0.4s ease' }}>
+              <div style={{ marginBottom: 36 }}>
+                <h2 style={{ fontSize: 26, fontWeight: 900, color: '#111827', marginBottom: 8, letterSpacing: -0.3 }}>
+                  면접관 로그인
+                </h2>
+                <p style={{ fontSize: 14, color: '#94a3b8', lineHeight: 1.5 }}>
+                  이름을 입력하고 평가 시스템에 접속하세요
+                </p>
+              </div>
+
+              <div style={{ marginBottom: 20 }}>
+                <label style={{
+                  fontSize: 12, fontWeight: 700, color: '#374151',
+                  display: 'block', marginBottom: 8, letterSpacing: 0.3,
+                }}>
+                  면접관 이름
+                </label>
+                <input
+                  style={{
+                    width: '100%', padding: '14px 16px', borderRadius: 12,
+                    border: loginError ? '2px solid #dc2626' : '2px solid #e5e7eb',
+                    fontSize: 15, outline: 'none', color: '#111827',
+                    background: '#fff', boxSizing: 'border-box',
+                    transition: 'border-color 0.15s, box-shadow 0.15s',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
+                  }}
+                  placeholder="예: 홍길동"
+                  value={loginInput}
+                  onChange={e => { setLoginInput(e.target.value); setLoginError(''); }}
+                  onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                  onFocus={e => {
+                    e.target.style.borderColor = '#dc2626';
+                    e.target.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.12)';
+                  }}
+                  onBlur={e => {
+                    if (!loginError) e.target.style.borderColor = '#e5e7eb';
+                    e.target.style.boxShadow = '0 1px 4px rgba(0,0,0,0.05)';
+                  }}
+                  autoFocus
+                />
+                {loginError && (
+                  <p style={{ fontSize: 12, color: '#dc2626', marginTop: 6, fontWeight: 600 }}>
+                    ⚠ {loginError}
+                  </p>
+                )}
+              </div>
+
+              <button
+                className="login-btn"
+                onClick={handleLogin}
                 style={{
-                  width: '100%', padding: '12px 16px', borderRadius: 10,
-                  border: loginError ? '1.5px solid #ef4444' : '1.5px solid #e2e8f0',
-                  fontSize: 14, outline: 'none', color: '#1e293b',
-                  background: '#fafbfc', boxSizing: 'border-box',
+                  width: '100%', padding: '14px', borderRadius: 12, border: 'none',
+                  background: 'linear-gradient(135deg, #7f1d1d 0%, #dc2626 100%)',
+                  color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer',
+                  boxShadow: '0 4px 20px rgba(220,38,38,0.35)',
+                  transition: 'all 0.15s',
+                  letterSpacing: 0.3,
                 }}
-                placeholder="예: 홍길동"
-                value={loginInput}
-                onChange={e => { setLoginInput(e.target.value); setLoginError(''); }}
-                onKeyDown={e => e.key === 'Enter' && handleLogin()}
-                autoFocus
-              />
-              {loginError && (
-                <p style={{ fontSize: 12, color: '#ef4444', marginTop: 6 }}>{loginError}</p>
-              )}
+              >
+                입장하기 →
+              </button>
             </div>
-            <button
-              className="login-btn"
-              onClick={handleLogin}
-              style={{
-                width: '100%', padding: '13px', borderRadius: 10, border: 'none',
-                background: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)',
-                color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer',
-                boxShadow: '0 4px 16px rgba(37,99,235,0.3)',
-                transition: 'all 0.15s',
-              }}
-            >
-              입장하기
-            </button>
           </div>
         </div>
       )}
@@ -1140,8 +1237,8 @@ export default function App() {
         <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #f0f4f8 0%, #e8eef7 100%)' }}>
           <header style={S.header}>
             <KAHLogo />
-            <div style={{ fontSize: 14, fontWeight: 600, color: '#1e3a5f' }}>
-              안녕하세요, <span style={{ color: '#2563eb' }}>{interviewerName}</span> 면접관님
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#7f1d1d' }}>
+              안녕하세요, <span style={{ color: '#dc2626' }}>{interviewerName}</span> 면접관님
             </div>
             <button
               className="logout-btn"
@@ -1157,7 +1254,7 @@ export default function App() {
           </header>
 
           <div style={{ maxWidth: 760, margin: '0 auto', padding: '48px 24px' }}>
-            <h1 style={{ fontSize: 28, fontWeight: 900, color: '#1e3a5f', marginBottom: 8 }}>
+            <h1 style={{ fontSize: 28, fontWeight: 900, color: '#7f1d1d', marginBottom: 8 }}>
               면접 평가
             </h1>
             <p style={{ fontSize: 14, color: '#94a3b8', marginBottom: 40 }}>
@@ -1183,13 +1280,13 @@ export default function App() {
                 >
                   <div style={{
                     width: 56, height: 56, borderRadius: 16, margin: '0 auto 16px',
-                    background: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)',
+                    background: 'linear-gradient(135deg, #7f1d1d 0%, #dc2626 100%)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    boxShadow: '0 4px 12px rgba(37,99,235,0.3)',
+                    boxShadow: '0 4px 12px rgba(220,38,38,0.3)',
                   }}>
                     <span style={{ fontSize: 24 }}>📋</span>
                   </div>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 4 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: '#7f1d1d', marginBottom: 4 }}>
                     {cohort}기
                   </div>
                   <div style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>
@@ -1198,7 +1295,6 @@ export default function App() {
                 </div>
               ))}
 
-              {/* 추가 버튼 */}
               <div
                 className="add-cohort-btn"
                 onClick={addCohort}
@@ -1248,7 +1344,7 @@ export default function App() {
           <KAHLogo />
           <div style={{
             padding: '4px 12px', borderRadius: 20,
-            background: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)',
+            background: 'linear-gradient(135deg, #7f1d1d 0%, #dc2626 100%)',
             color: '#fff', fontSize: 12, fontWeight: 700,
           }}>
             {selectedCohort}기 면접 평가
@@ -1271,8 +1367,8 @@ export default function App() {
             style={{
               border: "none", borderRadius: 8, padding: "8px 16px",
               fontSize: 13, fontWeight: 600, cursor: "pointer",
-              background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
-              color: "#fff", boxShadow: "0 2px 8px rgba(37,99,235,0.3)",
+              background: "linear-gradient(135deg, #7f1d1d 0%, #dc2626 100%)",
+              color: "#fff", boxShadow: "0 2px 8px rgba(220,38,38,0.3)",
             }}
           >
             {saving ? '저장 중...' : '✓ 평가 저장'}
@@ -1282,8 +1378,22 @@ export default function App() {
 
       <div style={S.body}>
         <aside style={S.sidebar}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", letterSpacing: 1, textTransform: "uppercase", marginBottom: 16 }}>
-            🏆 실시간 순위 (평균)
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", letterSpacing: 1, textTransform: "uppercase" }}>
+              🏆 실시간 순위 (평균)
+            </div>
+            <button
+              className="refresh-btn"
+              onClick={fetchCandidates}
+              title="새로고침"
+              style={{
+                border: "1.5px solid #e2e8f0", borderRadius: 6, padding: "3px 8px",
+                fontSize: 12, cursor: "pointer", background: "#fff", color: "#94a3b8",
+                transition: "all 0.15s", fontWeight: 600,
+              }}
+            >
+              ↻
+            </button>
           </div>
 
           {loading && (
@@ -1314,7 +1424,7 @@ export default function App() {
                 </div>
                 <div style={{
                   fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20,
-                  background: "#eff6ff", color: "#2563eb"
+                  background: "#fef2f2", color: "#dc2626"
                 }}>
                   {Math.round((c.avg_score / maxTotal) * 100)}%
                 </div>
@@ -1323,7 +1433,7 @@ export default function App() {
                 <button
                   onClick={(e) => { e.stopPropagation(); setShowDetailsModal(c); }}
                   style={{
-                    border: "none", background: "transparent", color: "#2563eb",
+                    border: "none", background: "transparent", color: "#dc2626",
                     fontSize: 11, padding: "4px 12px", cursor: "pointer",
                     fontWeight: 600, marginBottom: 6, marginLeft: 8,
                   }}
@@ -1336,10 +1446,10 @@ export default function App() {
 
           <div style={{ marginTop: 20, padding: "14px", borderRadius: 10, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
             <div style={{ fontSize: 10, color: "#94a3b8", letterSpacing: 0.5, marginBottom: 4, fontWeight: 600 }}>현재 평가 중</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#1e3a5f" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#7f1d1d" }}>
               {currentCandidate?.name || "—"}
             </div>
-            <div style={{ fontSize: 11, color: "#2563eb", fontWeight: 700 }}>
+            <div style={{ fontSize: 11, color: "#dc2626", fontWeight: 700 }}>
               내 점수: {total}점 / {maxTotal}점
             </div>
           </div>
@@ -1414,14 +1524,13 @@ export default function App() {
 
                 {/* ─── 돌발 질문 토글 섹션 ──────────────────────────────── */}
                 <div style={{ marginTop: 8, borderTop: "1px solid #f1f5f9", paddingTop: 14 }}>
-                  {/* 헤더 */}
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <button
                       onClick={() => setSurpriseTopicsOpen(v => !v)}
                       style={{
                         display: "flex", alignItems: "center", gap: 6,
                         background: "none", border: "none", cursor: "pointer",
-                        fontSize: 13, fontWeight: 700, color: "#1e3a5f", padding: 0,
+                        fontSize: 13, fontWeight: 700, color: "#7f1d1d", padding: 0,
                       }}
                     >
                       <span style={{
@@ -1433,7 +1542,7 @@ export default function App() {
                       💡 돌발 질문 주제
                       {selectedSurpriseTopics.length > 0 && (
                         <span style={{
-                          background: "#2563eb", color: "#fff",
+                          background: "#dc2626", color: "#fff",
                           borderRadius: 12, padding: "1px 8px",
                           fontSize: 11, fontWeight: 700,
                         }}>
@@ -1468,14 +1577,12 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* 토글 콘텐츠 */}
                   {surpriseTopicsOpen && (
                     <div style={{ marginTop: 12 }}>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
                         {surpriseTopics.map(topic => (
                           <div key={topic.id} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
                             {isEditingSurpriseTopics ? (
-                              // 편집 모드
                               editingSurpriseTopicId === topic.id ? (
                                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                                   <input
@@ -1505,8 +1612,8 @@ export default function App() {
                                     onClick={() => { setEditingSurpriseTopicId(topic.id); setEditingSurpriseTopicText(topic.text); }}
                                     title="수정"
                                     style={{
-                                      border: "none", background: "#e0e7ff", borderRadius: 6,
-                                      padding: "3px 6px", cursor: "pointer", fontSize: 11, color: "#3730a3",
+                                      border: "none", background: "#fef2f2", borderRadius: 6,
+                                      padding: "3px 6px", cursor: "pointer", fontSize: 11, color: "#991b1b",
                                     }}
                                   >✏️</button>
                                   <button
@@ -1520,17 +1627,16 @@ export default function App() {
                                 </div>
                               )
                             ) : (
-                              // 선택 모드
                               <button
                                 className="topic-chip"
                                 onClick={() => toggleSurpriseTopic(topic.id)}
                                 style={{
                                   padding: "5px 12px", borderRadius: 16, fontSize: 12, fontWeight: 600,
-                                  border: selectedSurpriseTopics.includes(topic.id) ? "1.5px solid #2563eb" : "1.5px solid #e2e8f0",
-                                  background: selectedSurpriseTopics.includes(topic.id) ? "#eff6ff" : "#f8fafc",
-                                  color: selectedSurpriseTopics.includes(topic.id) ? "#1d4ed8" : "#64748b",
+                                  border: selectedSurpriseTopics.includes(topic.id) ? "1.5px solid #dc2626" : "1.5px solid #e2e8f0",
+                                  background: selectedSurpriseTopics.includes(topic.id) ? "#fef2f2" : "#f8fafc",
+                                  color: selectedSurpriseTopics.includes(topic.id) ? "#b91c1c" : "#64748b",
                                   cursor: "pointer", transition: "all 0.15s",
-                                  boxShadow: selectedSurpriseTopics.includes(topic.id) ? "0 1px 6px rgba(37,99,235,0.2)" : "none",
+                                  boxShadow: selectedSurpriseTopics.includes(topic.id) ? "0 1px 6px rgba(220,38,38,0.2)" : "none",
                                 }}
                               >
                                 {selectedSurpriseTopics.includes(topic.id) && "✓ "}
@@ -1541,7 +1647,6 @@ export default function App() {
                         ))}
                       </div>
 
-                      {/* 새 주제 추가 입력 */}
                       {isAddingSurpriseTopic && (
                         <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                           <input
@@ -1557,11 +1662,10 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* 선택된 주제 요약 */}
                       {selectedSurpriseTopics.length > 0 && !isEditingSurpriseTopics && (
-                        <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "#eff6ff", border: "1px solid #bfdbfe" }}>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: "#1d4ed8" }}>선택된 주제: </span>
-                          <span style={{ fontSize: 12, color: "#1e40af" }}>
+                        <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "#fef2f2", border: "1px solid #fecaca" }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#b91c1c" }}>선택된 주제: </span>
+                          <span style={{ fontSize: 12, color: "#991b1b" }}>
                             {surpriseTopics.filter(t => selectedSurpriseTopics.includes(t.id)).map(t => t.text).join(" · ")}
                           </span>
                         </div>
@@ -1569,13 +1673,11 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                {/* ─────────────────────────────────────────────────────────── */}
               </div>
 
               <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
                 {/* ─── 평가 항목 카드 ─────────────────────────────────────── */}
                 <div style={{ ...S.card, flex: 1, minWidth: 320 }}>
-                  {/* 평가 항목 헤더 */}
                   <div style={{ ...S.sectionTitle, justifyContent: "space-between" }}>
                     <span>📊 평가 항목</span>
                     <div style={{ display: "flex", gap: 6 }}>
@@ -1601,13 +1703,11 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* 카테고리별 렌더링 */}
                   {displayCategories.map((cat, catIdx) => {
                     const catMax = cat.items.reduce((s, i) => s + i.max, 0);
                     return (
                       <div key={cat.id}>
-                        {/* 카테고리 헤더 */}
-                        <div style={{ fontSize: 12, fontWeight: 700, color: "#1e3a5f", marginBottom: 6, padding: catIdx === 0 ? "4px 0" : "12px 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#7f1d1d", marginBottom: 6, padding: catIdx === 0 ? "4px 0" : "12px 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
                           {isEditingEval ? (
                             <input
                               value={cat.label}
@@ -1620,7 +1720,6 @@ export default function App() {
                           <span style={{ color: "#94a3b8", fontWeight: 500 }}>({catMax}점 만점)</span>
                         </div>
 
-                        {/* 항목 목록 */}
                         {cat.items.map(item => (
                           isEditingEval ? (
                             <div key={item.field} style={{ ...S.scoreRow, gap: 8 }}>
@@ -1685,7 +1784,7 @@ export default function App() {
                           background: "#f8fafc", border: "1px solid #e2e8f0", textAlign: "center"
                         }}>
                           <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, marginBottom: 2 }}>{cat.label}</div>
-                          <div style={{ fontSize: 16, fontWeight: 800, color: "#1e3a5f" }}>{catScore}</div>
+                          <div style={{ fontSize: 16, fontWeight: 800, color: "#7f1d1d" }}>{catScore}</div>
                           <div style={{ fontSize: 9, color: "#94a3b8" }}>/ {catMax}</div>
                         </div>
                       );
@@ -1755,8 +1854,8 @@ export default function App() {
                   style={{
                     border: "none", borderRadius: 8, padding: "10px 28px",
                     fontSize: 13, fontWeight: 600, cursor: "pointer",
-                    background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
-                    color: "#fff", boxShadow: "0 2px 8px rgba(37,99,235,0.3)",
+                    background: "linear-gradient(135deg, #7f1d1d 0%, #dc2626 100%)",
+                    color: "#fff", boxShadow: "0 2px 8px rgba(220,38,38,0.3)",
                   }}>
                   {saving ? '저장 중...' : '✓ 평가 저장 & 순위 반영'}
                 </button>
