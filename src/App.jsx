@@ -1,0 +1,1781 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+import { RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from "recharts";
+
+// ─── Supabase Client (Inline) ────────────────────────────────────────────────
+const SUPABASE_URL = "https://kldmiyyjjlsysjevmblz.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtsZG1peXlqamxzeXNqZXZtYmx6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEzNDIyOTYsImV4cCI6MjA4NjkxODI5Nn0.kwB8sZMHqncZbNKNCpMy7DpE0mUy2CPTlYDaEOEFAww";
+
+const createSupabaseClient = (url, key) => {
+  const headers = {
+    'apikey': key,
+    'Authorization': `Bearer ${key}`,
+    'Content-Type': 'application/json',
+  };
+
+  const from = (table) => ({
+    select: (columns = '*') => ({
+      order: (column, options = {}) => ({
+        execute: async () => {
+          const order = options.ascending ? 'asc' : 'desc';
+          const res = await fetch(`${url}/rest/v1/${table}?select=${columns}&order=${column}.${order}`, { headers });
+          return { data: await res.json(), error: res.ok ? null : new Error('Failed to fetch') };
+        }
+      }),
+      eq: (column, value) => ({
+        execute: async () => {
+          const res = await fetch(`${url}/rest/v1/${table}?select=${columns}&${column}=eq.${value}`, { headers });
+          return { data: await res.json(), error: res.ok ? null : new Error('Failed to fetch') };
+        }
+      }),
+    }),
+    insert: (data) => ({
+      select: () => ({
+        single: async () => {
+          const res = await fetch(`${url}/rest/v1/${table}`, {
+            method: 'POST',
+            headers: { ...headers, 'Prefer': 'return=representation' },
+            body: JSON.stringify(data)
+          });
+          const json = await res.json();
+          return { data: Array.isArray(json) ? json[0] : json, error: res.ok ? null : new Error('Failed to insert') };
+        }
+      })
+    }),
+    update: (data) => ({
+      eq: (column, value) => ({
+        execute: async () => {
+          const res = await fetch(`${url}/rest/v1/${table}?${column}=eq.${value}`, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify(data)
+          });
+          return { data: await res.json(), error: res.ok ? null : new Error('Failed to update') };
+        }
+      })
+    }),
+    upsert: (data) => ({
+      execute: async () => {
+        const res = await fetch(`${url}/rest/v1/${table}`, {
+          method: 'POST',
+          headers: { ...headers, 'Prefer': 'resolution=merge-duplicates,return=representation' },
+          body: JSON.stringify(data)
+        });
+        return { data: await res.json(), error: res.ok ? null : new Error('Failed to upsert') };
+      }
+    }),
+  });
+
+  // settings 전용: key 기반 upsert / select
+  const settings = {
+    get: async (key) => {
+      try {
+        const res = await fetch(`${url}/rest/v1/app_settings?key=eq.${encodeURIComponent(key)}&select=value`, { headers });
+        if (!res.ok) return null;
+        const json = await res.json();
+        return json?.[0]?.value ?? null;
+      } catch { return null; }
+    },
+    set: async (key, value) => {
+      try {
+        await fetch(`${url}/rest/v1/app_settings`, {
+          method: 'POST',
+          headers: { ...headers, 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify({ key, value }),
+        });
+      } catch { /* silent fail */ }
+    },
+  };
+
+  return { from, settings };
+};
+
+const supabase = createSupabaseClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+function getInterviewerId() {
+  if (typeof window === 'undefined') return null;
+  let id = localStorage.getItem('kah_interviewer_id');
+  if (!id) {
+    id = `interviewer_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    localStorage.setItem('kah_interviewer_id', id);
+  }
+  return id;
+}
+
+// ─── KAH Logo Component ───────────────────────────────────────────────────────
+const KAHLogo = () => (
+  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+    <div style={{
+      width: 40, height: 40, borderRadius: 10,
+      background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      boxShadow: "0 4px 12px rgba(37,99,235,0.4)",
+      flexShrink: 0
+    }}>
+      <span style={{ color: "#fff", fontWeight: 900, fontSize: 14, letterSpacing: -0.5, fontFamily: "'Georgia', serif" }}>KAH</span>
+    </div>
+    <div>
+      <div style={{ color: "#1e3a5f", fontWeight: 800, fontSize: 15, letterSpacing: -0.3, lineHeight: 1.1 }}>KAH Interview</div>
+      <div style={{ color: "#64748b", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>Evaluation System</div>
+    </div>
+  </div>
+);
+
+// ─── Constants ─────────────────────────────────────────────────────────────
+const POSITIVE_TAGS = ["논리정연함", "자신감 있음", "준비 철저", "협업 마인드", "아이디어 우수", "높은 직무 이해도", "경청과 소통", "구체적 경험 제시", "성장 지향성"];
+const NEGATIVE_TAGS = ["소극적 태도", "동문서답", "근거 부족", "목소리 작음", "긴장함", "협업 우려", "방어적 태도"];
+
+const DEFAULT_EVAL_CATEGORIES = [
+  { id: 'job', label: '직무적합도', items: [
+    { field: 'sincerity', label: '성실성', max: 3 },
+    { field: 'cooperation', label: '협조성', max: 3 },
+    { field: 'planning', label: '계획성', max: 3 },
+  ]},
+  { id: 'communication', label: '의사소통', items: [
+    { field: 'expression', label: '표현력', max: 3 },
+    { field: 'commonsense', label: '상식성', max: 3 },
+  ]},
+  { id: 'personality_cat', label: '인성', items: [
+    { field: 'proactivity', label: '적극성', max: 3 },
+    { field: 'personality', label: '인성', max: 3 },
+  ]},
+  { id: 'surprise_q', label: '돌발질문', items: [
+    { field: 'q1', label: '내용 1', max: 5 },
+    { field: 'q2', label: '내용 2', max: 5 },
+    { field: 'comprehension', label: '이해력', max: 5 },
+    { field: 'logic', label: '논리력', max: 5 },
+    { field: 'creativity', label: '창의력', max: 5 },
+  ]},
+];
+
+const DEFAULT_SURPRISE_TOPICS = [
+  { id: 1, text: '조직문화 적응' },
+  { id: 2, text: '갈등 해결 경험' },
+  { id: 3, text: '리더십 경험' },
+  { id: 4, text: '실패 경험과 극복' },
+  { id: 5, text: '지원 동기' },
+  { id: 6, text: '향후 목표' },
+  { id: 7, text: '팀워크 경험' },
+  { id: 8, text: '스트레스 관리' },
+];
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+const S = {
+  wrap: {
+    fontFamily: "'DM Sans', 'Pretendard', 'Noto Sans KR', sans-serif",
+    background: "#f0f4f8",
+    minHeight: "100vh",
+    color: "#1e293b",
+  },
+  header: {
+    position: "sticky", top: 0, zIndex: 50,
+    background: "rgba(255,255,255,0.95)",
+    backdropFilter: "blur(12px)",
+    borderBottom: "1px solid #e2e8f0",
+    padding: "0 24px",
+    height: 64,
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    boxShadow: "0 1px 8px rgba(0,0,0,0.06)",
+  },
+  body: { display: "flex", alignItems: "flex-start" },
+  sidebar: {
+    width: 260, flexShrink: 0,
+    position: "sticky", top: 64,
+    height: "calc(100vh - 64px)",
+    overflowY: "auto",
+    background: "#fff",
+    borderRight: "1px solid #e2e8f0",
+    padding: "20px 16px",
+  },
+  main: { flex: 1, padding: "24px", maxWidth: 900 },
+  card: {
+    background: "#fff",
+    borderRadius: 16,
+    border: "1px solid #e2e8f0",
+    padding: "24px",
+    marginBottom: 20,
+    boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+  },
+  sectionTitle: {
+    fontSize: 13, fontWeight: 700, textTransform: "uppercase",
+    letterSpacing: 1.2, color: "#64748b", marginBottom: 16,
+    display: "flex", alignItems: "center", gap: 8,
+  },
+  inputRow: { display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" },
+  inputGroup: { display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 140 },
+  label: { fontSize: 11, fontWeight: 600, color: "#94a3b8", letterSpacing: 0.5 },
+  input: {
+    border: "1.5px solid #e2e8f0",
+    borderRadius: 8, padding: "8px 12px", fontSize: 13,
+    outline: "none", color: "#1e293b",
+    transition: "border-color 0.15s",
+    background: "#fafbfc",
+    width: "100%", boxSizing: "border-box",
+  },
+  scoreRow: {
+    display: "flex", alignItems: "center",
+    padding: "10px 0", borderBottom: "1px solid #f1f5f9",
+    gap: 12,
+  },
+  scoreLabel: { flex: 1, fontSize: 13, color: "#334155", fontWeight: 500 },
+  scoreInput: {
+    width: 60, border: "1.5px solid #e2e8f0",
+    borderRadius: 8, padding: "6px 10px",
+    fontSize: 13, textAlign: "center",
+    outline: "none", color: "#1e293b",
+    background: "#fafbfc",
+  },
+  maxLabel: { fontSize: 11, color: "#94a3b8", minWidth: 50 },
+  totalBox: {
+    background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
+    borderRadius: 12, padding: "16px 20px",
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    color: "#fff", marginTop: 16,
+  },
+  btn: {
+    border: "none", borderRadius: 8, padding: "8px 16px",
+    fontSize: 13, fontWeight: 600, cursor: "pointer",
+    transition: "all 0.15s",
+  },
+  primaryBtn: {
+    background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
+    color: "#fff", boxShadow: "0 2px 8px rgba(37,99,235,0.3)",
+  },
+  rankItem: (isActive) => ({
+    display: "flex", alignItems: "center", gap: 8,
+    padding: "10px 12px", borderRadius: 10, marginBottom: 6,
+    background: isActive ? "#eff6ff" : "#f8fafc",
+    border: isActive ? "1.5px solid #bfdbfe" : "1.5px solid transparent",
+    cursor: "pointer", transition: "all 0.15s",
+  }),
+  rankBadge: (rank) => ({
+    width: 22, height: 22, borderRadius: 6,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    fontSize: 10, fontWeight: 800, flexShrink: 0,
+    background: rank === 1 ? "#fbbf24" : rank === 2 ? "#94a3b8" : rank === 3 ? "#cd7c3a" : "#e2e8f0",
+    color: rank <= 3 ? "#fff" : "#64748b",
+  }),
+  tag: (type) => ({
+    display: "inline-flex", alignItems: "center",
+    padding: "4px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600,
+    border: "none", cursor: "pointer",
+    background: type === "positive" ? "#dcfce7" : "#fee2e2",
+    color: type === "positive" ? "#166534" : "#991b1b",
+    marginRight: 6, marginBottom: 6,
+    transition: "all 0.15s",
+  }),
+  badge: (type) => ({
+    display: "inline-flex", alignItems: "center", gap: 4,
+    padding: "4px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600,
+    background: type === "positive" ? "#22c55e" : "#ef4444",
+    color: "#fff", marginRight: 6, marginBottom: 6,
+  }),
+  timerBtn: (variant) => ({
+    border: "none", borderRadius: 8, padding: "6px 14px",
+    fontSize: 12, fontWeight: 700, cursor: "pointer",
+    background: variant === "start" ? "#22c55e" : variant === "pause" ? "#f59e0b" : "#94a3b8",
+    color: "#fff",
+    transition: "all 0.15s",
+  }),
+  dropZone: (dragging) => ({
+    border: `2px dashed ${dragging ? "#2563eb" : "#cbd5e1"}`,
+    borderRadius: 12,
+    padding: "32px",
+    textAlign: "center",
+    background: dragging ? "#eff6ff" : "#f8fafc",
+    cursor: "pointer",
+    transition: "all 0.2s",
+  }),
+  smallBtn: {
+    border: "1.5px solid #e2e8f0", borderRadius: 6, padding: "4px 10px",
+    fontSize: 11, fontWeight: 600, cursor: "pointer",
+    background: "#fff", color: "#64748b", transition: "all 0.15s",
+  },
+  smallPrimaryBtn: {
+    border: "none", borderRadius: 6, padding: "4px 10px",
+    fontSize: 11, fontWeight: 600, cursor: "pointer",
+    background: "#2563eb", color: "#fff", transition: "all 0.15s",
+  },
+  smallDangerBtn: {
+    border: "none", borderRadius: 6, padding: "4px 8px",
+    fontSize: 11, fontWeight: 600, cursor: "pointer",
+    background: "#fee2e2", color: "#991b1b", transition: "all 0.15s",
+  },
+};
+
+// ─── Fake PDF Parser ──────────────────────────────────────────────────────────
+function fakeParsePDF(filename) {
+  return {
+    name: "홍길동", dob: "2002-05-14", available12: "가능",
+    phone: "010-1234-5678", email: "hong@kah.ac.kr",
+    studentId: "20220001", address: "서울특별시 강남구 역삼동",
+    major: "컴퓨터공학과", grade: "3학년 1학기",
+    career: "교내 개발 동아리 2년, 외부 해커톤 입상 경험",
+    schedule: "2월 17일 14:00",
+  };
+}
+
+// ─── ScoreInput Component ─────────────────────────────────────────────────────
+function ScoreInput({ label, field, scores, max, onChange }) {
+  const pct = max > 0 ? scores[field] / max : 0;
+  const barColor = pct >= 0.8 ? "#22c55e" : pct >= 0.5 ? "#f59e0b" : "#ef4444";
+  return (
+    <div style={S.scoreRow}>
+      <div style={S.scoreLabel}>{label}</div>
+      <div style={{ flex: 1, height: 6, borderRadius: 3, background: "#f1f5f9", overflow: "hidden" }}>
+        <div style={{ height: "100%", width: `${pct * 100}%`, background: barColor, borderRadius: 3, transition: "width 0.3s" }} />
+      </div>
+      <input
+        type="number" min={0} max={max} value={scores[field] || 0}
+        onChange={e => onChange(field, Math.min(max, Math.max(0, Number(e.target.value))))}
+        style={S.scoreInput}
+      />
+      <span style={S.maxLabel}>/ {max}점</span>
+    </div>
+  );
+}
+
+// ─── Timer Component ──────────────────────────────────────────────────────────
+function Timer() {
+  const [minutes, setMinutes] = useState(10);
+  const [seconds, setSeconds] = useState(0);
+  const [running, setRunning] = useState(false);
+  const [remaining, setRemaining] = useState(null);
+  const intervalRef = useRef(null);
+
+  const totalSecs = remaining !== null ? remaining : minutes * 60 + seconds;
+  const displayMin = Math.floor(totalSecs / 60);
+  const displaySec = totalSecs % 60;
+  const isWarning = totalSecs <= 60 && totalSecs > 0;
+  const isDone = totalSecs === 0 && running === false && remaining === 0;
+
+  useEffect(() => {
+    if (running) {
+      intervalRef.current = setInterval(() => {
+        setRemaining(r => {
+          if (r <= 1) { clearInterval(intervalRef.current); setRunning(false); return 0; }
+          return r - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(intervalRef.current);
+  }, [running]);
+
+  const start = () => {
+    if (remaining === null) setRemaining(minutes * 60 + seconds);
+    setRunning(true);
+  };
+  const pause = () => { setRunning(false); clearInterval(intervalRef.current); };
+  const reset = () => {
+    setRunning(false); clearInterval(intervalRef.current);
+    setRemaining(null);
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", letterSpacing: 1 }}>⏱ TIMER</div>
+      {remaining === null ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <input type="number" min={0} max={99} value={minutes}
+            onChange={e => setMinutes(Number(e.target.value))}
+            style={{ ...S.scoreInput, width: 48 }} />
+          <span style={{ color: "#64748b" }}>:</span>
+          <input type="number" min={0} max={59} value={seconds}
+            onChange={e => setSeconds(Number(e.target.value))}
+            style={{ ...S.scoreInput, width: 48 }} />
+        </div>
+      ) : (
+        <div style={{
+          fontSize: 22, fontWeight: 800, letterSpacing: 2, minWidth: 80, textAlign: "center",
+          color: isDone ? "#22c55e" : isWarning ? "#ef4444" : "#1e3a5f",
+          animation: isWarning && running ? "pulse 1s infinite" : "none",
+        }}>
+          {String(displayMin).padStart(2, "0")}:{String(displaySec).padStart(2, "0")}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6 }}>
+        {!running && <button onClick={start} style={S.timerBtn("start")}>▶ Start</button>}
+        {running && <button onClick={pause} style={S.timerBtn("pause")}>⏸ Pause</button>}
+        <button onClick={reset} style={S.timerBtn("reset")}>↺ Reset</button>
+      </div>
+      {isDone && <span style={{ fontSize: 12, color: "#22c55e", fontWeight: 700 }}>✓ 완료!</span>}
+    </div>
+  );
+}
+
+// ─── Radar Chart Component ────────────────────────────────────────────────────
+function CompetencyRadar({ scores, evalCategories }) {
+  const data = evalCategories.map(cat => {
+    const catScore = cat.items.reduce((sum, item) => sum + (scores[item.field] || 0), 0);
+    const catMax = cat.items.reduce((sum, item) => sum + item.max, 0);
+    return {
+      subject: cat.label,
+      value: catMax > 0 ? Math.round((catScore / catMax) * 100) : 0,
+    };
+  });
+
+  return (
+    <ResponsiveContainer width="100%" height={260}>
+      <RadarChart data={data}>
+        <PolarGrid stroke="#e2e8f0" />
+        <PolarAngleAxis dataKey="subject" tick={{ fontSize: 11, fill: "#64748b", fontWeight: 600 }} />
+        <PolarRadiusAxis angle={90} domain={[0, 100]} tick={{ fontSize: 9, fill: "#94a3b8" }} tickCount={5} />
+        <Radar name="역량" dataKey="value" stroke="#2563eb" fill="#3b82f6" fillOpacity={0.25} strokeWidth={2} dot={{ fill: "#2563eb", r: 3 }} />
+        <Tooltip formatter={(v) => `${v}%`} />
+      </RadarChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ─── Evaluation Details Modal ─────────────────────────────────────────────────
+function EvaluationDetailsModal({ candidate, onClose, evalCategories }) {
+  if (!candidate || !candidate.evaluations || candidate.evaluations.length === 0) return null;
+
+  const labelMap = {};
+  evalCategories.forEach(cat => {
+    cat.items.forEach(item => {
+      labelMap[item.field] = item.label;
+    });
+  });
+
+  const maxTotal = evalCategories.reduce((sum, cat) =>
+    sum + cat.items.reduce((s, item) => s + item.max, 0), 0);
+
+  return (
+    <div style={{
+      position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+      background: "rgba(0,0,0,0.5)", zIndex: 1000,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: 20,
+    }} onClick={onClose}>
+      <div style={{
+        background: "#fff", borderRadius: 16, padding: 32,
+        maxWidth: 700, width: "100%", maxHeight: "80vh", overflowY: "auto",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+      }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+          <div>
+            <h2 style={{ fontSize: 20, fontWeight: 800, color: "#1e3a5f", marginBottom: 4 }}>
+              {candidate.name} - 평가 상세
+            </h2>
+            <p style={{ fontSize: 13, color: "#64748b" }}>
+              총 {candidate.evaluations.length}명의 면접관이 평가했습니다
+            </p>
+          </div>
+          <button onClick={onClose} style={{
+            border: "none", background: "#f1f5f9", borderRadius: 8,
+            width: 32, height: 32, cursor: "pointer", fontSize: 18, color: "#64748b",
+          }}>×</button>
+        </div>
+
+        <div style={{ marginBottom: 24 }}>
+          <div style={{
+            background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
+            borderRadius: 12, padding: "16px 20px", color: "#fff",
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+          }}>
+            <div>
+              <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4 }}>평균 점수</div>
+              <div style={{ fontSize: 28, fontWeight: 900 }}>{candidate.avg_score}</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 11, opacity: 0.8 }}>/ {maxTotal}점</div>
+              <div style={{ fontSize: 22, fontWeight: 800 }}>
+                {Math.round((candidate.avg_score / maxTotal) * 100)}%
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#64748b", marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>
+          개별 평가 내역
+        </div>
+
+        {candidate.evaluations.map((evaluation, idx) => (
+          <div key={idx} style={{
+            background: "#f8fafc", borderRadius: 12, padding: 16, marginBottom: 12,
+            border: "1px solid #e2e8f0",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{
+                  width: 32, height: 32, borderRadius: 8,
+                  background: "#2563eb", color: "#fff",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 12, fontWeight: 700,
+                }}>
+                  {idx + 1}
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>면접관 ID</div>
+                  <div style={{ fontSize: 12, color: "#1e3a5f", fontWeight: 600, fontFamily: "monospace" }}>
+                    {evaluation.interviewer_id.slice(-12)}
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#2563eb" }}>
+                {evaluation.total_score}점
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 12 }}>
+              {Object.entries(evaluation.scores).map(([key, value]) => (
+                <div key={key} style={{
+                  background: "#fff", borderRadius: 6, padding: "6px 10px",
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                }}>
+                  <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>
+                    {labelMap[key] || key}
+                  </span>
+                  <span style={{ fontSize: 12, color: "#1e3a5f", fontWeight: 700 }}>{value}</span>
+                </div>
+              ))}
+            </div>
+
+            {evaluation.tags && evaluation.tags.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 4, fontWeight: 600 }}>태그</div>
+                {evaluation.tags.map((tag, i) => (
+                  <span key={i} style={S.badge(tag.type)}>{tag.text}</span>
+                ))}
+              </div>
+            )}
+
+            {evaluation.note && (
+              <div>
+                <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 4, fontWeight: 600 }}>메모</div>
+                <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5, background: "#fff", padding: 8, borderRadius: 6 }}>
+                  {evaluation.note}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main App ─────────────────────────────────────────────────────────────────
+export default function App() {
+  // ─── 화면 / 기수 상태 ───────────────────────────────────────────────────────
+  const [view, setView] = useState(() =>
+    localStorage.getItem('kah_interviewer_name') ? 'cohortSelect' : 'login'
+  );
+  const [loginInput, setLoginInput] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [interviewerName, setInterviewerName] = useState(
+    () => localStorage.getItem('kah_interviewer_name') || ''
+  );
+  const [selectedCohort, setSelectedCohort] = useState(null);
+  const [cohorts, setCohorts] = useState([6, 7, 8]);
+
+  // State management
+  const [selectedCandidateId, setSelectedCandidateId] = useState(null);
+  const [currentCandidate, setCurrentCandidate] = useState(null);
+  const [currentScores, setCurrentScores] = useState({
+    sincerity: 0, cooperation: 0, planning: 0,
+    expression: 0, commonsense: 0,
+    proactivity: 0, personality: 0,
+    q1: 0, q2: 0, comprehension: 0, logic: 0, creativity: 0,
+  });
+  const [currentTags, setCurrentTags] = useState([]);
+  const [currentNote, setCurrentNote] = useState('');
+  const [candidates, setCandidates] = useState([]);
+  const [interviewerId, setInterviewerId] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const [parseMsg, setParseMsg] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [showDetailsModal, setShowDetailsModal] = useState(null);
+  const fileRef = useRef();
+
+  // ─── 평가항목 편집 상태 ────────────────────────────────────────────────────
+  const [evalCategories, setEvalCategories] = useState(() => {
+    try {
+      const saved = localStorage.getItem('kah_eval_categories');
+      return saved ? JSON.parse(saved) : DEFAULT_EVAL_CATEGORIES;
+    } catch { return DEFAULT_EVAL_CATEGORIES; }
+  });
+  const [isEditingEval, setIsEditingEval] = useState(false);
+  const [editEvalTemp, setEditEvalTemp] = useState(null);
+
+  // ─── 돌발 질문 주제 상태 ──────────────────────────────────────────────────
+  const [surpriseTopicsOpen, setSurpriseTopicsOpen] = useState(false);
+  const [surpriseTopics, setSurpriseTopics] = useState(() => {
+    try {
+      const saved = localStorage.getItem('kah_surprise_topics');
+      return saved ? JSON.parse(saved) : DEFAULT_SURPRISE_TOPICS;
+    } catch { return DEFAULT_SURPRISE_TOPICS; }
+  });
+  const [selectedSurpriseTopics, setSelectedSurpriseTopics] = useState([]);
+  const [isEditingSurpriseTopics, setIsEditingSurpriseTopics] = useState(false);
+  const [isAddingSurpriseTopic, setIsAddingSurpriseTopic] = useState(false);
+  const [newSurpriseTopicText, setNewSurpriseTopicText] = useState('');
+  const [editingSurpriseTopicId, setEditingSurpriseTopicId] = useState(null);
+  const [editingSurpriseTopicText, setEditingSurpriseTopicText] = useState('');
+  const [settingsSyncing, setSettingsSyncing] = useState(false);
+
+  // ─── 설정 영속성 (localStorage + Supabase) ────────────────────────────────
+  const persistEvalCategories = async (categories) => {
+    localStorage.setItem('kah_eval_categories', JSON.stringify(categories));
+    await supabase.settings.set('eval_categories', categories);
+  };
+
+  const persistSurpriseTopics = async (topics) => {
+    localStorage.setItem('kah_surprise_topics', JSON.stringify(topics));
+    await supabase.settings.set('surprise_topics', topics);
+  };
+
+  // 앱 시작 시 Supabase에서 설정 로드 (localStorage 덮어쓰기)
+  useEffect(() => {
+    const loadSettings = async () => {
+      const remoteCategories = await supabase.settings.get('eval_categories');
+      if (remoteCategories) {
+        setEvalCategories(remoteCategories);
+        localStorage.setItem('kah_eval_categories', JSON.stringify(remoteCategories));
+      }
+      const remoteTopics = await supabase.settings.get('surprise_topics');
+      if (remoteTopics) {
+        setSurpriseTopics(remoteTopics);
+        localStorage.setItem('kah_surprise_topics', JSON.stringify(remoteTopics));
+      }
+      const remoteCohorts = await supabase.settings.get('cohorts');
+      if (remoteCohorts && Array.isArray(remoteCohorts) && remoteCohorts.length > 0) {
+        setCohorts(remoteCohorts);
+      }
+    };
+    loadSettings();
+  }, []);
+
+  // ─── 평가항목 편집 핸들러 ─────────────────────────────────────────────────
+  const startEvalEdit = () => {
+    setEditEvalTemp(JSON.parse(JSON.stringify(evalCategories)));
+    setIsEditingEval(true);
+  };
+
+  const cancelEvalEdit = () => {
+    setEditEvalTemp(null);
+    setIsEditingEval(false);
+  };
+
+  const saveEvalEdit = async () => {
+    setSettingsSyncing(true);
+    setEvalCategories(editEvalTemp);
+    await persistEvalCategories(editEvalTemp);
+    setEditEvalTemp(null);
+    setIsEditingEval(false);
+    setSettingsSyncing(false);
+  };
+
+  const updateEditTempCatLabel = (catId, value) => {
+    setEditEvalTemp(prev => prev.map(cat =>
+      cat.id === catId ? { ...cat, label: value } : cat
+    ));
+  };
+
+  const updateEditTempItemLabel = (catId, field, value) => {
+    setEditEvalTemp(prev => prev.map(cat =>
+      cat.id === catId
+        ? { ...cat, items: cat.items.map(item => item.field === field ? { ...item, label: value } : item) }
+        : cat
+    ));
+  };
+
+  const updateEditTempItemMax = (catId, field, value) => {
+    setEditEvalTemp(prev => prev.map(cat =>
+      cat.id === catId
+        ? { ...cat, items: cat.items.map(item => item.field === field ? { ...item, max: Math.max(1, value) } : item) }
+        : cat
+    ));
+  };
+
+  // ─── 돌발 질문 핸들러 ─────────────────────────────────────────────────────
+  const toggleSurpriseTopic = async (id) => {
+    const next = selectedSurpriseTopics.includes(id)
+      ? selectedSurpriseTopics.filter(x => x !== id)
+      : [...selectedSurpriseTopics, id];
+    setSelectedSurpriseTopics(next);
+
+    // 현재 지원자가 있으면 candidates.info에 바로 저장
+    if (currentCandidate && !currentCandidate.id.toString().startsWith('temp_')) {
+      const updatedInfo = { ...currentCandidate.info, surpriseTopics: next };
+      setCurrentCandidate(prev => ({ ...prev, info: updatedInfo }));
+      try {
+        await supabase.from('candidates').update({ info: updatedInfo }).eq('id', currentCandidate.id).execute();
+      } catch (e) { console.error('surprise topic save error', e); }
+    }
+  };
+
+  const addSurpriseTopic = async () => {
+    if (!newSurpriseTopicText.trim()) return;
+    const newId = Date.now();
+    const updated = [...surpriseTopics, { id: newId, text: newSurpriseTopicText.trim() }];
+    setSurpriseTopics(updated);
+    await persistSurpriseTopics(updated);
+    setNewSurpriseTopicText('');
+    setIsAddingSurpriseTopic(false);
+  };
+
+  const saveSurpriseTopicEdit = async (id) => {
+    if (!editingSurpriseTopicText.trim()) return;
+    const updated = surpriseTopics.map(t => t.id === id ? { ...t, text: editingSurpriseTopicText.trim() } : t);
+    setSurpriseTopics(updated);
+    await persistSurpriseTopics(updated);
+    setEditingSurpriseTopicId(null);
+    setEditingSurpriseTopicText('');
+  };
+
+  const deleteSurpriseTopic = async (id) => {
+    const updated = surpriseTopics.filter(t => t.id !== id);
+    setSurpriseTopics(updated);
+    await persistSurpriseTopics(updated);
+    setSelectedSurpriseTopics(prev => prev.filter(x => x !== id));
+  };
+
+  // ─── 점수 계산 ────────────────────────────────────────────────────────────
+  const dynamicMaxScores = {};
+  evalCategories.forEach(cat => {
+    cat.items.forEach(item => { dynamicMaxScores[item.field] = item.max; });
+  });
+
+  const total = Object.entries(currentScores).reduce((sum, [k, v]) => sum + (Number(v) || 0), 0);
+  const maxTotal = Object.values(dynamicMaxScores).reduce((a, b) => a + b, 0);
+
+  const updateScore = (field, value) => {
+    setCurrentScores(prev => ({ ...prev, [field]: value }));
+  };
+
+  const toggleTag = (text, type) => {
+    setCurrentTags(prev => {
+      const exists = prev.find(t => t.text === text);
+      if (exists) return prev.filter(t => t.text !== text);
+      return [...prev, { text, type }];
+    });
+  };
+
+  const resetCurrentEvaluation = () => {
+    setCurrentCandidate(null);
+    setCurrentScores({
+      sincerity: 0, cooperation: 0, planning: 0,
+      expression: 0, commonsense: 0,
+      proactivity: 0, personality: 0,
+      q1: 0, q2: 0, comprehension: 0, logic: 0, creativity: 0,
+    });
+    setCurrentTags([]);
+    setCurrentNote('');
+    setSelectedCandidateId(null);
+    setSelectedSurpriseTopics([]);
+  };
+
+  const loadEvaluationForCandidate = (candidateId, evalInterviewerId) => {
+    const candidate = candidates.find(c => c.id === candidateId);
+    if (!candidate) return;
+
+    const myEvaluation = candidate.evaluations?.find(e => e.interviewer_id === evalInterviewerId);
+
+    const defaultScores = {
+      sincerity: 0, cooperation: 0, planning: 0,
+      expression: 0, commonsense: 0,
+      proactivity: 0, personality: 0,
+      q1: 0, q2: 0, comprehension: 0, logic: 0, creativity: 0,
+    };
+
+    // candidates.info에 저장된 돌발 질문 선택 복원
+    const savedSurpriseTopics = candidate.info?.surpriseTopics || [];
+    setSelectedSurpriseTopics(savedSurpriseTopics);
+
+    if (myEvaluation) {
+      setSelectedCandidateId(candidateId);
+      setCurrentCandidate(candidate);
+      setCurrentScores(myEvaluation.scores || defaultScores);
+      setCurrentTags(myEvaluation.tags || []);
+      setCurrentNote(myEvaluation.note || '');
+    } else {
+      setSelectedCandidateId(candidateId);
+      setCurrentCandidate(candidate);
+      setCurrentScores(defaultScores);
+      setCurrentTags([]);
+      setCurrentNote('');
+    }
+  };
+
+  useEffect(() => {
+    const id = getInterviewerId();
+    setInterviewerId(id);
+  }, []);
+
+  useEffect(() => {
+    if (selectedCohort !== null) fetchCandidates();
+  }, [selectedCohort]);
+
+  const fetchCandidates = async () => {
+    try {
+      setLoading(true);
+
+      const { data: candidatesData, error: candidatesError } = await supabase.from('candidates').select().order('created_at', { ascending: false }).execute();
+      if (candidatesError) throw candidatesError;
+
+      const { data: evaluationsData, error: evaluationsError } = await supabase.from('evaluations').select().order('created_at', { ascending: false }).execute();
+      if (evaluationsError) throw evaluationsError;
+
+      const candidatesFiltered = candidatesData.filter(c => (c.info?.cohort ?? null) === selectedCohort);
+
+      const candidatesWithScores = candidatesFiltered.map(candidate => {
+        const candidateEvaluations = evaluationsData.filter(e => e.candidate_id === candidate.id);
+        const avgScore = candidateEvaluations.length > 0
+          ? Math.round(candidateEvaluations.reduce((sum, e) => sum + (e.total_score || 0), 0) / candidateEvaluations.length)
+          : 0;
+
+        return {
+          ...candidate,
+          evaluations: candidateEvaluations,
+          avg_score: avgScore,
+          evaluation_count: candidateEvaluations.length,
+        };
+      });
+
+      candidatesWithScores.sort((a, b) => b.avg_score - a.avg_score);
+      setCandidates(candidatesWithScores);
+    } catch (error) {
+      console.error('Error fetching candidates:', error);
+      alert('데이터를 불러오는데 실패했습니다: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCandidateClick = (candidate) => {
+    if (!interviewerId) {
+      alert('면접관 ID가 설정되지 않았습니다.');
+      return;
+    }
+    loadEvaluationForCandidate(candidate.id, interviewerId);
+  };
+
+  const saveEvaluation = async () => {
+    if (!currentCandidate || !interviewerId) {
+      alert('지원자를 선택해주세요.');
+      return;
+    }
+
+    if (!currentCandidate.name || !currentCandidate.name.trim()) {
+      alert('지원자 이름을 입력해주세요.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      let candidateId = currentCandidate.id;
+
+      // 지원자 info에 선택된 돌발 질문 포함
+      const infoWithSurprise = { ...currentCandidate.info, surpriseTopics: selectedSurpriseTopics };
+
+      if (currentCandidate.id.toString().startsWith('temp_')) {
+        const { data: newCandidate, error: createError } = await supabase
+          .from('candidates')
+          .insert({ name: currentCandidate.name, info: { ...infoWithSurprise, cohort: selectedCohort } })
+          .select()
+          .single();
+
+        if (createError) throw createError;
+        candidateId = newCandidate.id;
+
+        setCurrentCandidate({ ...currentCandidate, id: candidateId, info: infoWithSurprise });
+        setSelectedCandidateId(candidateId);
+      } else {
+        // 기존 지원자도 info 업데이트
+        await supabase.from('candidates').update({ info: infoWithSurprise }).eq('id', candidateId).execute();
+        setCurrentCandidate(prev => ({ ...prev, info: infoWithSurprise }));
+      }
+
+      const { error } = await supabase
+        .from('evaluations')
+        .upsert({
+          candidate_id: candidateId,
+          interviewer_id: interviewerId,
+          scores: currentScores,
+          total_score: total,
+          tags: currentTags,
+          note: currentNote,
+        })
+        .execute();
+
+      if (error) throw error;
+
+      alert('✅ 평가가 저장되었습니다!');
+      await fetchCandidates();
+    } catch (error) {
+      console.error('Error saving evaluation:', error);
+      alert('평가 저장에 실패했습니다: ' + error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createCandidate = async (candidateInfo) => {
+    try {
+      const { data, error } = await supabase
+        .from('candidates')
+        .insert({ name: candidateInfo.name, info: candidateInfo })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      await fetchCandidates();
+
+      if (data && interviewerId) {
+        loadEvaluationForCandidate(data.id, interviewerId);
+      }
+
+      return data;
+    } catch (error) {
+      console.error('Error creating candidate:', error);
+      alert('지원자 등록에 실패했습니다: ' + error.message);
+      return null;
+    }
+  };
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    setDragging(false);
+    const file = e.dataTransfer?.files?.[0] || e.target.files?.[0];
+    if (!file) return;
+
+    setParseMsg("📄 PDF 파싱 중...");
+    setTimeout(async () => {
+      const parsed = fakeParsePDF(file.name);
+      setParseMsg("✅ 정보가 자동으로 입력되었습니다.");
+      await createCandidate(parsed);
+    }, 1200);
+  }, [interviewerId]);
+
+  const newCandidate = () => {
+    resetCurrentEvaluation();
+    setParseMsg("");
+    const tempCandidate = {
+      id: 'temp_' + Date.now(),
+      name: '',
+      info: {
+        dob: '', available12: '', phone: '', email: '',
+        studentId: '', address: '', major: '', grade: '',
+        career: '', schedule: '', cohort: selectedCohort
+      },
+      evaluations: [],
+      avg_score: 0,
+      evaluation_count: 0
+    };
+    setCurrentCandidate(tempCandidate);
+    setSelectedCandidateId(tempCandidate.id);
+  };
+
+  const updateCandidateInfo = async (field, value) => {
+    if (!currentCandidate) return;
+
+    const updatedInfo = { ...currentCandidate.info, [field]: value };
+    const updatedName = field === 'name' ? value : currentCandidate.name;
+
+    setCurrentCandidate({ ...currentCandidate, name: updatedName, info: updatedInfo });
+
+    if (!currentCandidate.id.toString().startsWith('temp_')) {
+      try {
+        const { error } = await supabase
+          .from('candidates')
+          .update({ name: updatedName, info: updatedInfo })
+          .eq('id', currentCandidate.id)
+          .execute();
+
+        if (error) throw error;
+      } catch (error) {
+        console.error('Error updating candidate:', error);
+      }
+    }
+  };
+
+  const inputField = (label, field, span = false) => {
+    const value = field === 'name' ? currentCandidate?.name : currentCandidate?.info?.[field];
+
+    return (
+      <div style={{ ...S.inputGroup, ...(span ? { flex: "0 0 100%", minWidth: "100%" } : {}) }}>
+        <label style={S.label}>{label}</label>
+        <input
+          style={S.input}
+          value={value || ""}
+          onChange={e => updateCandidateInfo(field, e.target.value)}
+          placeholder={label}
+          disabled={!currentCandidate}
+          onFocus={e => { e.target.style.borderColor = "#2563eb"; e.target.style.background = "#fff"; }}
+          onBlur={e => { e.target.style.borderColor = "#e2e8f0"; e.target.style.background = "#fafbfc"; }}
+        />
+      </div>
+    );
+  };
+
+  // 현재 편집 중인 카테고리 데이터 가져오기
+  const displayCategories = isEditingEval ? editEvalTemp : evalCategories;
+
+  // ─── 로그인 / 기수 선택 핸들러 ───────────────────────────────────────────
+  const handleLogin = () => {
+    if (!loginInput.trim()) { setLoginError('이름을 입력해주세요.'); return; }
+    const name = loginInput.trim();
+    localStorage.setItem('kah_interviewer_name', name);
+    setInterviewerName(name);
+    setLoginError('');
+    setView('cohortSelect');
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('kah_interviewer_name');
+    setInterviewerName('');
+    setSelectedCohort(null);
+    resetCurrentEvaluation();
+    setCandidates([]);
+    setView('login');
+  };
+
+  const handleCohortSelect = (cohort) => {
+    setSelectedCohort(cohort);
+    resetCurrentEvaluation();
+    setView('interview');
+  };
+
+  const handleBackToCohortSelect = () => {
+    setSelectedCohort(null);
+    resetCurrentEvaluation();
+    setCandidates([]);
+    setView('cohortSelect');
+  };
+
+  const addCohort = async () => {
+    const maxCohort = cohorts.length > 0 ? Math.max(...cohorts) : 5;
+    const next = maxCohort + 1;
+    const updated = [...cohorts, next].sort((a, b) => a - b);
+    setCohorts(updated);
+    await supabase.settings.set('cohorts', updated);
+  };
+
+  return (
+    <div style={S.wrap}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&display=swap');
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        input[type=number]::-webkit-inner-spin-button { opacity: 1; }
+        ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+        .tag-btn:hover { filter: brightness(0.92); transform: scale(0.97); }
+        .rank-item:hover { background: #e0e7ff !important; }
+        .finalize-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+        .new-btn:hover { border-color: #2563eb; color: #2563eb; }
+        .small-btn:hover { border-color: #2563eb; color: #2563eb; }
+        .small-primary-btn:hover { opacity: 0.85; }
+        .topic-chip:hover { filter: brightness(0.95); }
+        .cohort-card:hover { transform: translateY(-4px); box-shadow: 0 12px 32px rgba(37,99,235,0.18) !important; border-color: #2563eb !important; }
+        .cohort-card:active { transform: translateY(-1px); }
+        .login-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+        .add-cohort-btn:hover { border-color: #2563eb; color: #2563eb; background: #eff6ff !important; }
+        .logout-btn:hover { color: #ef4444; border-color: #ef4444; }
+        .back-btn:hover { background: #f1f5f9 !important; }
+      `}</style>
+
+      {/* ─── 로그인 화면 ───────────────────────────────────────────────────── */}
+      {view === 'login' && (
+        <div style={{
+          minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'linear-gradient(135deg, #f0f4f8 0%, #e8eef7 100%)',
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: 24, padding: '48px 40px', width: 400,
+            boxShadow: '0 8px 40px rgba(37,99,235,0.12)', border: '1px solid #e2e8f0',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 28 }}>
+              <KAHLogo />
+            </div>
+            <h2 style={{ fontSize: 22, fontWeight: 800, color: '#1e3a5f', textAlign: 'center', marginBottom: 6 }}>
+              면접관 로그인
+            </h2>
+            <p style={{ fontSize: 13, color: '#94a3b8', textAlign: 'center', marginBottom: 32 }}>
+              이름을 입력하고 평가 시스템에 접속하세요
+            </p>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: '#64748b', display: 'block', marginBottom: 6 }}>
+                면접관 이름
+              </label>
+              <input
+                style={{
+                  width: '100%', padding: '12px 16px', borderRadius: 10,
+                  border: loginError ? '1.5px solid #ef4444' : '1.5px solid #e2e8f0',
+                  fontSize: 14, outline: 'none', color: '#1e293b',
+                  background: '#fafbfc', boxSizing: 'border-box',
+                }}
+                placeholder="예: 홍길동"
+                value={loginInput}
+                onChange={e => { setLoginInput(e.target.value); setLoginError(''); }}
+                onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                autoFocus
+              />
+              {loginError && (
+                <p style={{ fontSize: 12, color: '#ef4444', marginTop: 6 }}>{loginError}</p>
+              )}
+            </div>
+            <button
+              className="login-btn"
+              onClick={handleLogin}
+              style={{
+                width: '100%', padding: '13px', borderRadius: 10, border: 'none',
+                background: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)',
+                color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer',
+                boxShadow: '0 4px 16px rgba(37,99,235,0.3)',
+                transition: 'all 0.15s',
+              }}
+            >
+              입장하기
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── 기수 선택 화면 ────────────────────────────────────────────────── */}
+      {view === 'cohortSelect' && (
+        <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #f0f4f8 0%, #e8eef7 100%)' }}>
+          <header style={S.header}>
+            <KAHLogo />
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#1e3a5f' }}>
+              안녕하세요, <span style={{ color: '#2563eb' }}>{interviewerName}</span> 면접관님
+            </div>
+            <button
+              className="logout-btn"
+              onClick={handleLogout}
+              style={{
+                padding: '7px 14px', borderRadius: 8, border: '1.5px solid #e2e8f0',
+                background: '#fff', color: '#94a3b8', fontSize: 13, fontWeight: 600,
+                cursor: 'pointer', transition: 'all 0.15s',
+              }}
+            >
+              로그아웃
+            </button>
+          </header>
+
+          <div style={{ maxWidth: 760, margin: '0 auto', padding: '48px 24px' }}>
+            <h1 style={{ fontSize: 28, fontWeight: 900, color: '#1e3a5f', marginBottom: 8 }}>
+              면접 평가
+            </h1>
+            <p style={{ fontSize: 14, color: '#94a3b8', marginBottom: 40 }}>
+              평가를 진행할 기수를 선택하세요
+            </p>
+
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+              gap: 20,
+            }}>
+              {cohorts.map(cohort => (
+                <div
+                  key={cohort}
+                  className="cohort-card"
+                  onClick={() => handleCohortSelect(cohort)}
+                  style={{
+                    background: '#fff', borderRadius: 18, border: '1.5px solid #e2e8f0',
+                    padding: '32px 24px', cursor: 'pointer', textAlign: 'center',
+                    boxShadow: '0 2px 12px rgba(0,0,0,0.05)',
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  <div style={{
+                    width: 56, height: 56, borderRadius: 16, margin: '0 auto 16px',
+                    background: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    boxShadow: '0 4px 12px rgba(37,99,235,0.3)',
+                  }}>
+                    <span style={{ fontSize: 24 }}>📋</span>
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: '#1e3a5f', marginBottom: 4 }}>
+                    {cohort}기
+                  </div>
+                  <div style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>
+                    면접 평가
+                  </div>
+                </div>
+              ))}
+
+              {/* 추가 버튼 */}
+              <div
+                className="add-cohort-btn"
+                onClick={addCohort}
+                style={{
+                  background: '#f8fafc', borderRadius: 18, border: '1.5px dashed #cbd5e1',
+                  padding: '32px 24px', cursor: 'pointer', textAlign: 'center',
+                  transition: 'all 0.2s',
+                }}
+              >
+                <div style={{
+                  width: 56, height: 56, borderRadius: 16, margin: '0 auto 16px',
+                  background: '#f1f5f9', display: 'flex', alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  <span style={{ fontSize: 28, color: '#94a3b8' }}>+</span>
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#64748b', marginBottom: 4 }}>
+                  기수 추가
+                </div>
+                <div style={{ fontSize: 12, color: '#b0bec5', fontWeight: 500 }}>
+                  {cohorts.length > 0 ? `${Math.max(...cohorts) + 1}기 추가` : '새 기수'}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── 평가 시스템 화면 ──────────────────────────────────────────────── */}
+      {view === 'interview' && (
+      <div>
+
+      <header style={S.header}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <button
+            className="back-btn"
+            onClick={handleBackToCohortSelect}
+            style={{
+              padding: '7px 14px', borderRadius: 8, border: '1.5px solid #e2e8f0',
+              background: '#fff', color: '#64748b', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', transition: 'all 0.15s', display: 'flex',
+              alignItems: 'center', gap: 6,
+            }}
+          >
+            ← 목록
+          </button>
+          <KAHLogo />
+          <div style={{
+            padding: '4px 12px', borderRadius: 20,
+            background: 'linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)',
+            color: '#fff', fontSize: 12, fontWeight: 700,
+          }}>
+            {selectedCohort}기 면접 평가
+          </div>
+        </div>
+        <Timer />
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {interviewerName && (
+            <div style={{ fontSize: 12, color: "#64748b", marginRight: 4, fontWeight: 600 }}>
+              {interviewerName}
+            </div>
+          )}
+          <button className="new-btn" onClick={newCandidate} style={{
+            borderRadius: 8, padding: "8px 16px",
+            fontSize: 13, fontWeight: 600, cursor: "pointer",
+            background: "#fff", border: "1.5px solid #e2e8f0", color: "#64748b"
+          }}>+ 신규 지원자</button>
+          <button
+            onClick={saveEvaluation}
+            style={{
+              border: "none", borderRadius: 8, padding: "8px 16px",
+              fontSize: 13, fontWeight: 600, cursor: "pointer",
+              background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
+              color: "#fff", boxShadow: "0 2px 8px rgba(37,99,235,0.3)",
+            }}
+          >
+            {saving ? '저장 중...' : '✓ 평가 저장'}
+          </button>
+        </div>
+      </header>
+
+      <div style={S.body}>
+        <aside style={S.sidebar}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", letterSpacing: 1, textTransform: "uppercase", marginBottom: 16 }}>
+            🏆 실시간 순위 (평균)
+          </div>
+
+          {loading && (
+            <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", marginTop: 20 }}>
+              로딩 중...
+            </div>
+          )}
+
+          {!loading && candidates.length === 0 && (
+            <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", marginTop: 20 }}>
+              지원자를 등록해주세요.
+            </div>
+          )}
+
+          {!loading && candidates.map((c, i) => (
+            <div key={c.id}>
+              <div
+                className="rank-item"
+                style={S.rankItem(c.id === selectedCandidateId)}
+                onClick={() => handleCandidateClick(c)}
+              >
+                <div style={S.rankBadge(i + 1)}>{i + 1}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>{c.name}</div>
+                  <div style={{ fontSize: 11, color: "#64748b" }}>
+                    평균: {c.avg_score}점 ({c.evaluation_count}명)
+                  </div>
+                </div>
+                <div style={{
+                  fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20,
+                  background: "#eff6ff", color: "#2563eb"
+                }}>
+                  {Math.round((c.avg_score / maxTotal) * 100)}%
+                </div>
+              </div>
+              {c.evaluation_count > 0 && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setShowDetailsModal(c); }}
+                  style={{
+                    border: "none", background: "transparent", color: "#2563eb",
+                    fontSize: 11, padding: "4px 12px", cursor: "pointer",
+                    fontWeight: 600, marginBottom: 6, marginLeft: 8,
+                  }}
+                >
+                  📊 평가 상세보기
+                </button>
+              )}
+            </div>
+          ))}
+
+          <div style={{ marginTop: 20, padding: "14px", borderRadius: 10, background: "#f8fafc", border: "1px solid #e2e8f0" }}>
+            <div style={{ fontSize: 10, color: "#94a3b8", letterSpacing: 0.5, marginBottom: 4, fontWeight: 600 }}>현재 평가 중</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#1e3a5f" }}>
+              {currentCandidate?.name || "—"}
+            </div>
+            <div style={{ fontSize: 11, color: "#2563eb", fontWeight: 700 }}>
+              내 점수: {total}점 / {maxTotal}점
+            </div>
+          </div>
+        </aside>
+
+        <main style={S.main}>
+          {!currentCandidate && (
+            <div style={S.card}>
+              <div style={S.sectionTitle}>📎 지원서 업로드 (PDF)</div>
+              <div
+                style={S.dropZone(dragging)}
+                onClick={() => fileRef.current?.click()}
+                onDragOver={e => { e.preventDefault(); setDragging(true); }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={handleDrop}
+              >
+                <div style={{ fontSize: 28, marginBottom: 8 }}>📄</div>
+                <div style={{ fontSize: 13, color: "#64748b", fontWeight: 600 }}>
+                  PDF 파일을 드래그하거나 클릭하여 업로드하세요
+                </div>
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>지원서의 정보가 자동으로 입력됩니다</div>
+              </div>
+              <input ref={fileRef} type="file" accept=".pdf" style={{ display: "none" }} onChange={handleDrop} />
+              {parseMsg && (
+                <div style={{
+                  marginTop: 10, fontSize: 12,
+                  color: parseMsg.startsWith("✅") ? "#166534" : "#64748b",
+                  background: parseMsg.startsWith("✅") ? "#dcfce7" : "#f8fafc",
+                  padding: "8px 12px", borderRadius: 8, fontWeight: 600,
+                }}>
+                  {parseMsg}
+                </div>
+              )}
+            </div>
+          )}
+
+          {currentCandidate && (
+            <>
+              {/* ─── 지원자 정보 카드 ─────────────────────────────────────── */}
+              <div style={S.card}>
+                <div style={S.sectionTitle}>👤 지원자 정보</div>
+                <div style={S.inputRow}>
+                  {inputField("이름", "name")}
+                  {inputField("생년월일", "dob")}
+                  {inputField("12개월 참여", "available12")}
+                  {inputField("휴대전화", "phone")}
+                </div>
+                <div style={S.inputRow}>
+                  {inputField("이메일", "email")}
+                  {inputField("학번", "studentId")}
+                  {inputField("전공", "major")}
+                  {inputField("학년-학기", "grade")}
+                </div>
+                <div style={S.inputRow}>
+                  {inputField("주소", "address", true)}
+                </div>
+                <div style={S.inputRow}>
+                  <div style={{ ...S.inputGroup, flex: "0 0 100%", minWidth: "100%" }}>
+                    <label style={S.label}>경력 및 활동사항</label>
+                    <textarea
+                      rows={2}
+                      value={currentCandidate?.info?.career || ""}
+                      onChange={e => updateCandidateInfo("career", e.target.value)}
+                      style={{ ...S.input, resize: "vertical", minHeight: 52, lineHeight: 1.5 }}
+                      placeholder="경력 및 활동사항을 입력하세요"
+                    />
+                  </div>
+                </div>
+                <div style={S.inputRow}>
+                  {inputField("면접 일정", "schedule")}
+                </div>
+
+                {/* ─── 돌발 질문 토글 섹션 ──────────────────────────────── */}
+                <div style={{ marginTop: 8, borderTop: "1px solid #f1f5f9", paddingTop: 14 }}>
+                  {/* 헤더 */}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <button
+                      onClick={() => setSurpriseTopicsOpen(v => !v)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 6,
+                        background: "none", border: "none", cursor: "pointer",
+                        fontSize: 13, fontWeight: 700, color: "#1e3a5f", padding: 0,
+                      }}
+                    >
+                      <span style={{
+                        display: "inline-block",
+                        transition: "transform 0.2s",
+                        transform: surpriseTopicsOpen ? "rotate(90deg)" : "rotate(0deg)",
+                        fontSize: 10, color: "#64748b",
+                      }}>▶</span>
+                      💡 돌발 질문 주제
+                      {selectedSurpriseTopics.length > 0 && (
+                        <span style={{
+                          background: "#2563eb", color: "#fff",
+                          borderRadius: 12, padding: "1px 8px",
+                          fontSize: 11, fontWeight: 700,
+                        }}>
+                          {selectedSurpriseTopics.length}개 선택
+                        </span>
+                      )}
+                    </button>
+
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        className="small-btn"
+                        onClick={() => {
+                          setIsEditingSurpriseTopics(v => !v);
+                          setEditingSurpriseTopicId(null);
+                          if (!surpriseTopicsOpen) setSurpriseTopicsOpen(true);
+                        }}
+                        style={S.smallBtn}
+                      >
+                        {isEditingSurpriseTopics ? "✓ 편집 완료" : "✏️ 수정"}
+                      </button>
+                      <button
+                        className="small-primary-btn"
+                        onClick={() => {
+                          setSurpriseTopicsOpen(true);
+                          setIsAddingSurpriseTopic(true);
+                          setNewSurpriseTopicText('');
+                        }}
+                        style={S.smallPrimaryBtn}
+                      >
+                        + 추가
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 토글 콘텐츠 */}
+                  {surpriseTopicsOpen && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                        {surpriseTopics.map(topic => (
+                          <div key={topic.id} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                            {isEditingSurpriseTopics ? (
+                              // 편집 모드
+                              editingSurpriseTopicId === topic.id ? (
+                                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                  <input
+                                    value={editingSurpriseTopicText}
+                                    onChange={e => setEditingSurpriseTopicText(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter') saveSurpriseTopicEdit(topic.id); if (e.key === 'Escape') setEditingSurpriseTopicId(null); }}
+                                    style={{ ...S.input, width: 120, padding: "4px 8px", fontSize: 12 }}
+                                    autoFocus
+                                  />
+                                  <button
+                                    onClick={() => saveSurpriseTopicEdit(topic.id)}
+                                    style={{ ...S.smallPrimaryBtn, padding: "4px 8px" }}
+                                  >저장</button>
+                                  <button
+                                    onClick={() => setEditingSurpriseTopicId(null)}
+                                    style={{ ...S.smallBtn, padding: "4px 8px" }}
+                                  >취소</button>
+                                </div>
+                              ) : (
+                                <div style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                                  <span style={{
+                                    padding: "4px 10px", borderRadius: 16, fontSize: 12, fontWeight: 500,
+                                    background: "#f1f5f9", border: "1px solid #e2e8f0", color: "#475569",
+                                    cursor: "default",
+                                  }}>{topic.text}</span>
+                                  <button
+                                    onClick={() => { setEditingSurpriseTopicId(topic.id); setEditingSurpriseTopicText(topic.text); }}
+                                    title="수정"
+                                    style={{
+                                      border: "none", background: "#e0e7ff", borderRadius: 6,
+                                      padding: "3px 6px", cursor: "pointer", fontSize: 11, color: "#3730a3",
+                                    }}
+                                  >✏️</button>
+                                  <button
+                                    onClick={() => deleteSurpriseTopic(topic.id)}
+                                    title="삭제"
+                                    style={{
+                                      border: "none", background: "#fee2e2", borderRadius: 6,
+                                      padding: "3px 6px", cursor: "pointer", fontSize: 11, color: "#991b1b",
+                                    }}
+                                  >×</button>
+                                </div>
+                              )
+                            ) : (
+                              // 선택 모드
+                              <button
+                                className="topic-chip"
+                                onClick={() => toggleSurpriseTopic(topic.id)}
+                                style={{
+                                  padding: "5px 12px", borderRadius: 16, fontSize: 12, fontWeight: 600,
+                                  border: selectedSurpriseTopics.includes(topic.id) ? "1.5px solid #2563eb" : "1.5px solid #e2e8f0",
+                                  background: selectedSurpriseTopics.includes(topic.id) ? "#eff6ff" : "#f8fafc",
+                                  color: selectedSurpriseTopics.includes(topic.id) ? "#1d4ed8" : "#64748b",
+                                  cursor: "pointer", transition: "all 0.15s",
+                                  boxShadow: selectedSurpriseTopics.includes(topic.id) ? "0 1px 6px rgba(37,99,235,0.2)" : "none",
+                                }}
+                              >
+                                {selectedSurpriseTopics.includes(topic.id) && "✓ "}
+                                {topic.text}
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* 새 주제 추가 입력 */}
+                      {isAddingSurpriseTopic && (
+                        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                          <input
+                            value={newSurpriseTopicText}
+                            onChange={e => setNewSurpriseTopicText(e.target.value)}
+                            placeholder="새 돌발 질문 주제 입력..."
+                            style={{ ...S.input, flex: 1, padding: "6px 10px", fontSize: 12 }}
+                            onKeyDown={e => { if (e.key === 'Enter') addSurpriseTopic(); if (e.key === 'Escape') setIsAddingSurpriseTopic(false); }}
+                            autoFocus
+                          />
+                          <button onClick={addSurpriseTopic} style={S.smallPrimaryBtn}>추가</button>
+                          <button onClick={() => setIsAddingSurpriseTopic(false)} style={S.smallBtn}>취소</button>
+                        </div>
+                      )}
+
+                      {/* 선택된 주제 요약 */}
+                      {selectedSurpriseTopics.length > 0 && !isEditingSurpriseTopics && (
+                        <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "#eff6ff", border: "1px solid #bfdbfe" }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#1d4ed8" }}>선택된 주제: </span>
+                          <span style={{ fontSize: 12, color: "#1e40af" }}>
+                            {surpriseTopics.filter(t => selectedSurpriseTopics.includes(t.id)).map(t => t.text).join(" · ")}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {/* ─────────────────────────────────────────────────────────── */}
+              </div>
+
+              <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+                {/* ─── 평가 항목 카드 ─────────────────────────────────────── */}
+                <div style={{ ...S.card, flex: 1, minWidth: 320 }}>
+                  {/* 평가 항목 헤더 */}
+                  <div style={{ ...S.sectionTitle, justifyContent: "space-between" }}>
+                    <span>📊 평가 항목</span>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {isEditingEval ? (
+                        <>
+                          <button className="small-primary-btn" onClick={saveEvalEdit} style={S.smallPrimaryBtn} disabled={settingsSyncing}>
+                            {settingsSyncing ? '저장 중...' : '✓ 저장'}
+                          </button>
+                          <button className="small-btn" onClick={cancelEvalEdit} style={S.smallBtn} disabled={settingsSyncing}>취소</button>
+                        </>
+                      ) : (
+                        <button className="small-btn" onClick={startEvalEdit} style={S.smallBtn}>✏️ 수정</button>
+                      )}
+                    </div>
+                  </div>
+
+                  {isEditingEval && (
+                    <div style={{
+                      background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8,
+                      padding: "8px 12px", marginBottom: 12, fontSize: 11, color: "#92400e", fontWeight: 600,
+                    }}>
+                      ✏️ 항목명과 만점을 수정한 후 저장 버튼을 누르세요.
+                    </div>
+                  )}
+
+                  {/* 카테고리별 렌더링 */}
+                  {displayCategories.map((cat, catIdx) => {
+                    const catMax = cat.items.reduce((s, i) => s + i.max, 0);
+                    return (
+                      <div key={cat.id}>
+                        {/* 카테고리 헤더 */}
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#1e3a5f", marginBottom: 6, padding: catIdx === 0 ? "4px 0" : "12px 0 4px", display: "flex", alignItems: "center", gap: 8 }}>
+                          {isEditingEval ? (
+                            <input
+                              value={cat.label}
+                              onChange={e => updateEditTempCatLabel(cat.id, e.target.value)}
+                              style={{ ...S.input, width: 110, padding: "4px 8px", fontSize: 12, fontWeight: 700 }}
+                            />
+                          ) : (
+                            <span>{cat.label}</span>
+                          )}
+                          <span style={{ color: "#94a3b8", fontWeight: 500 }}>({catMax}점 만점)</span>
+                        </div>
+
+                        {/* 항목 목록 */}
+                        {cat.items.map(item => (
+                          isEditingEval ? (
+                            <div key={item.field} style={{ ...S.scoreRow, gap: 8 }}>
+                              <input
+                                value={item.label}
+                                onChange={e => updateEditTempItemLabel(cat.id, item.field, e.target.value)}
+                                style={{ ...S.input, flex: 1, padding: "5px 8px", fontSize: 12 }}
+                                placeholder="항목명"
+                              />
+                              <span style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>만점</span>
+                              <input
+                                type="number"
+                                min={1}
+                                max={20}
+                                value={item.max}
+                                onChange={e => updateEditTempItemMax(cat.id, item.field, Number(e.target.value))}
+                                style={{ ...S.scoreInput, width: 52 }}
+                              />
+                              <span style={{ fontSize: 11, color: "#94a3b8" }}>점</span>
+                            </div>
+                          ) : (
+                            <ScoreInput
+                              key={item.field}
+                              label={item.label}
+                              field={item.field}
+                              scores={currentScores}
+                              max={item.max}
+                              onChange={updateScore}
+                            />
+                          )
+                        ))}
+                      </div>
+                    );
+                  })}
+
+                  <div style={S.totalBox}>
+                    <div>
+                      <div style={{ fontSize: 11, opacity: 0.7, letterSpacing: 1 }}>MY SCORE</div>
+                      <div style={{ fontSize: 28, fontWeight: 900 }}>{total}</div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 11, opacity: 0.7 }}>/ {maxTotal}점</div>
+                      <div style={{ fontSize: 22, fontWeight: 800 }}>{Math.round((total / maxTotal) * 100)}%</div>
+                      <div style={{ marginTop: 4, height: 6, width: 100, background: "rgba(255,255,255,0.2)", borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${(total / maxTotal) * 100}%`, background: "#fff", borderRadius: 3, transition: "width 0.4s" }} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ─── 역량 레이더 카드 ─────────────────────────────────── */}
+                <div style={{ ...S.card, minWidth: 280, flex: 1, display: "flex", flexDirection: "column" }}>
+                  <div style={S.sectionTitle}>🕸 역량 레이더</div>
+                  <CompetencyRadar scores={currentScores} evalCategories={evalCategories} />
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+                    {evalCategories.map(cat => {
+                      const catScore = cat.items.reduce((sum, item) => sum + (currentScores[item.field] || 0), 0);
+                      const catMax = cat.items.reduce((sum, item) => sum + item.max, 0);
+                      return (
+                        <div key={cat.id} style={{
+                          flex: 1, minWidth: 80, padding: "8px 10px", borderRadius: 8,
+                          background: "#f8fafc", border: "1px solid #e2e8f0", textAlign: "center"
+                        }}>
+                          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, marginBottom: 2 }}>{cat.label}</div>
+                          <div style={{ fontSize: 16, fontWeight: 800, color: "#1e3a5f" }}>{catScore}</div>
+                          <div style={{ fontSize: 9, color: "#94a3b8" }}>/ {catMax}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* ─── 질적 피드백 카드 ─────────────────────────────────────── */}
+              <div style={S.card}>
+                <div style={S.sectionTitle}>💬 질적 피드백 태그</div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#166534", marginBottom: 8, letterSpacing: 0.5 }}>✅ POSITIVE</div>
+                  {POSITIVE_TAGS.map(t => (
+                    <button key={t} className="tag-btn" onClick={() => toggleTag(t, "positive")} style={{
+                      ...S.tag("positive"),
+                      opacity: currentTags.find(x => x.text === t) ? 1 : 0.55,
+                      transform: currentTags.find(x => x.text === t) ? "scale(1.04)" : "scale(1)",
+                      boxShadow: currentTags.find(x => x.text === t) ? "0 2px 8px rgba(34,197,94,0.25)" : "none",
+                    }}>{t}</button>
+                  ))}
+                </div>
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#991b1b", marginBottom: 8, letterSpacing: 0.5 }}>❌ NEGATIVE</div>
+                  {NEGATIVE_TAGS.map(t => (
+                    <button key={t} className="tag-btn" onClick={() => toggleTag(t, "negative")} style={{
+                      ...S.tag("negative"),
+                      opacity: currentTags.find(x => x.text === t) ? 1 : 0.55,
+                      transform: currentTags.find(x => x.text === t) ? "scale(1.04)" : "scale(1)",
+                      boxShadow: currentTags.find(x => x.text === t) ? "0 2px 8px rgba(239,68,68,0.2)" : "none",
+                    }}>{t}</button>
+                  ))}
+                </div>
+
+                <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 8, letterSpacing: 0.5 }}>선택된 태그</div>
+                  {currentTags.length === 0 && <span style={{ fontSize: 12, color: "#cbd5e1" }}>태그를 선택하면 여기에 표시됩니다.</span>}
+                  {currentTags.map((t, i) => (
+                    <span key={i} style={S.badge(t.type)}>
+                      {t.text}
+                      <span onClick={() => toggleTag(t.text, t.type)}
+                        style={{ cursor: "pointer", fontSize: 14, lineHeight: 1, marginLeft: 2 }}>×</span>
+                    </span>
+                  ))}
+                </div>
+
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 6, letterSpacing: 0.5 }}>면접 메모</div>
+                  <textarea
+                    rows={3}
+                    value={currentNote}
+                    onChange={e => setCurrentNote(e.target.value)}
+                    placeholder="추가 메모를 입력하세요..."
+                    style={{ ...S.input, resize: "vertical", lineHeight: 1.6 }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 12, justifyContent: "flex-end", marginBottom: 40 }}>
+                <button onClick={newCandidate} style={{
+                  borderRadius: 8, padding: "8px 16px",
+                  fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  background: "#fff", border: "1.5px solid #e2e8f0", color: "#64748b"
+                }}>새 지원자</button>
+                <button
+                  onClick={saveEvaluation}
+                  style={{
+                    border: "none", borderRadius: 8, padding: "10px 28px",
+                    fontSize: 13, fontWeight: 600, cursor: "pointer",
+                    background: "linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%)",
+                    color: "#fff", boxShadow: "0 2px 8px rgba(37,99,235,0.3)",
+                  }}>
+                  {saving ? '저장 중...' : '✓ 평가 저장 & 순위 반영'}
+                </button>
+              </div>
+            </>
+          )}
+        </main>
+      </div>
+
+      {showDetailsModal && (
+        <EvaluationDetailsModal
+          candidate={showDetailsModal}
+          onClose={() => setShowDetailsModal(null)}
+          evalCategories={evalCategories}
+        />
+      )}
+      </div>
+      )}
+
+    </div>
+  );
+}
