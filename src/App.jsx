@@ -68,7 +68,7 @@ const createSupabaseClient = (url, key) => {
   const settings = {
     get: async (key) => {
       try {
-        const res = await fetch(`${url}/rest/v1/app_settings?key=eq.${encodeURIComponent(key)}&select=value`, { headers });
+        const res = await fetch(`${url}/rest/v1/app_settings_gen6?key=eq.${encodeURIComponent(key)}&select=value`, { headers });
         if (!res.ok) return null;
         const json = await res.json();
         return json?.[0]?.value ?? null;
@@ -76,7 +76,7 @@ const createSupabaseClient = (url, key) => {
     },
     set: async (key, value) => {
       try {
-        await fetch(`${url}/rest/v1/app_settings`, {
+        await fetch(`${url}/rest/v1/app_settings_gen6`, {
           method: 'POST',
           headers: { ...headers, 'Prefer': 'resolution=merge-duplicates,return=minimal' },
           body: JSON.stringify({ key, value }),
@@ -505,9 +505,9 @@ function EvaluationDetailsModal({ candidate, onClose, evalCategories }) {
                   {idx + 1}
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>면접관 ID</div>
-                  <div style={{ fontSize: 12, color: "#7f1d1d", fontWeight: 600, fontFamily: "monospace" }}>
-                    {evaluation.interviewer_id.slice(-12)}
+                  <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>면접관</div>
+                  <div style={{ fontSize: 12, color: "#7f1d1d", fontWeight: 600 }}>
+                    {evaluation.interviewer_name || evaluation.interviewer_id.slice(-12)}
                   </div>
                 </div>
               </div>
@@ -554,17 +554,19 @@ function EvaluationDetailsModal({ candidate, onClose, evalCategories }) {
   );
 }
 
+// ─── 기수별 테이블명 헬퍼 ──────────────────────────────────────────────────────
+const cohortTable = (cohort, type) => `${type}_gen${cohort}`;
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   // ─── 화면 / 기수 상태 ───────────────────────────────────────────────────────
-  const [view, setView] = useState(() =>
-    localStorage.getItem('kah_interviewer_name') ? 'cohortSelect' : 'login'
-  );
-  const [loginInput, setLoginInput] = useState('');
+  const [view, setView] = useState('login');
+  const [loginId, setLoginId] = useState('');
+  const [loginPw, setLoginPw] = useState('');
   const [loginError, setLoginError] = useState('');
-  const [interviewerName, setInterviewerName] = useState(
-    () => localStorage.getItem('kah_interviewer_name') || ''
-  );
+  const [nameInput, setNameInput] = useState('');
+  const [nameError, setNameError] = useState('');
+  const [interviewerName, setInterviewerName] = useState('');
   const [selectedCohort, setSelectedCohort] = useState(null);
   const [cohorts, setCohorts] = useState([6, 7, 8]);
 
@@ -697,7 +699,7 @@ export default function App() {
       const updatedInfo = { ...currentCandidate.info, surpriseTopics: next };
       setCurrentCandidate(prev => ({ ...prev, info: updatedInfo }));
       try {
-        await supabase.from('candidates').update({ info: updatedInfo }).eq('id', currentCandidate.id).execute();
+        await supabase.from(cohortTable(selectedCohort, 'candidates')).update({ info: updatedInfo }).eq('id', currentCandidate.id).execute();
       } catch (e) { console.error('surprise topic save error', e); }
     }
   };
@@ -825,15 +827,13 @@ export default function App() {
     try {
       setLoading(true);
 
-      const { data: candidatesData, error: candidatesError } = await supabase.from('candidates').select().order('created_at', { ascending: false }).execute();
+      const { data: candidatesData, error: candidatesError } = await supabase.from(cohortTable(selectedCohort, 'candidates')).select().order('created_at', { ascending: false }).execute();
       if (candidatesError) throw candidatesError;
 
-      const { data: evaluationsData, error: evaluationsError } = await supabase.from('evaluations').select().order('created_at', { ascending: false }).execute();
+      const { data: evaluationsData, error: evaluationsError } = await supabase.from(cohortTable(selectedCohort, 'evaluations')).select().order('created_at', { ascending: false }).execute();
       if (evaluationsError) throw evaluationsError;
 
-      const candidatesFiltered = candidatesData.filter(c => (c.info?.cohort ?? null) === selectedCohort);
-
-      const candidatesWithScores = candidatesFiltered.map(candidate => {
+      const candidatesWithScores = candidatesData.map(candidate => {
         const candidateEvaluations = evaluationsData.filter(e => e.candidate_id === candidate.id);
         const avgScore = candidateEvaluations.length > 0
           ? Math.round(candidateEvaluations.reduce((sum, e) => sum + (e.total_score || 0), 0) / candidateEvaluations.length)
@@ -865,6 +865,36 @@ export default function App() {
     loadEvaluationForCandidate(candidate.id, interviewerId);
   };
 
+  const deleteCandidate = async (candidate) => {
+    if (!window.confirm(`'${candidate.name}' 지원자를 삭제하시겠습니까?\n평가 데이터도 함께 삭제됩니다.`)) return;
+    try {
+      await supabase.from(cohortTable(selectedCohort, 'evaluations')).update({ candidate_id: null }).eq('candidate_id', candidate.id).execute();
+      await fetch(`${SUPABASE_URL}/rest/v1/${cohortTable(selectedCohort, 'evaluations')}?candidate_id=eq.${candidate.id}`, {
+        method: 'DELETE',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        }
+      });
+      await fetch(`${SUPABASE_URL}/rest/v1/${cohortTable(selectedCohort, 'candidates')}?id=eq.${candidate.id}`, {
+        method: 'DELETE',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        }
+      });
+      if (currentCandidate?.id === candidate.id) {
+        setCurrentCandidate(null);
+        setSelectedCandidateId(null);
+        resetCurrentEvaluation();
+      }
+      await fetchCandidates();
+    } catch (error) {
+      console.error('Error deleting candidate:', error);
+      alert('삭제에 실패했습니다: ' + error.message);
+    }
+  };
+
   const saveEvaluation = async () => {
     if (!currentCandidate || !interviewerId) {
       alert('지원자를 선택해주세요.');
@@ -885,7 +915,7 @@ export default function App() {
 
       if (currentCandidate.id.toString().startsWith('temp_')) {
         const { data: newCandidate, error: createError } = await supabase
-          .from('candidates')
+          .from(cohortTable(selectedCohort, 'candidates'))
           .insert({ name: currentCandidate.name, info: { ...infoWithSurprise, cohort: selectedCohort } })
           .select()
           .single();
@@ -896,15 +926,16 @@ export default function App() {
         setCurrentCandidate({ ...currentCandidate, id: candidateId, info: infoWithSurprise });
         setSelectedCandidateId(candidateId);
       } else {
-        await supabase.from('candidates').update({ info: infoWithSurprise }).eq('id', candidateId).execute();
+        await supabase.from(cohortTable(selectedCohort, 'candidates')).update({ info: infoWithSurprise }).eq('id', candidateId).execute();
         setCurrentCandidate(prev => ({ ...prev, info: infoWithSurprise }));
       }
 
       const { error } = await supabase
-        .from('evaluations')
+        .from(cohortTable(selectedCohort, 'evaluations'))
         .upsert({
           candidate_id: candidateId,
           interviewer_id: interviewerId,
+          interviewer_name: interviewerName,
           scores: currentScores,
           total_score: total,
           tags: currentTags,
@@ -927,7 +958,7 @@ export default function App() {
   const createCandidate = async (candidateInfo) => {
     try {
       const { data, error } = await supabase
-        .from('candidates')
+        .from(cohortTable(selectedCohort, 'candidates'))
         .insert({ name: candidateInfo.name, info: candidateInfo })
         .select()
         .single();
@@ -992,7 +1023,7 @@ export default function App() {
     if (!currentCandidate.id.toString().startsWith('temp_')) {
       try {
         const { error } = await supabase
-          .from('candidates')
+          .from(cohortTable(selectedCohort, 'candidates'))
           .update({ name: updatedName, info: updatedInfo })
           .eq('id', currentCandidate.id)
           .execute();
@@ -1027,17 +1058,29 @@ export default function App() {
 
   // ─── 로그인 / 기수 선택 핸들러 ───────────────────────────────────────────
   const handleLogin = () => {
-    if (!loginInput.trim()) { setLoginError('이름을 입력해주세요.'); return; }
-    const name = loginInput.trim();
+    if (loginId === 'kgukah' && loginPw === 'kah2026') {
+      setLoginError('');
+      setView('interviewerName');
+    } else {
+      setLoginError('아이디 또는 비밀번호가 올바르지 않습니다.');
+    }
+  };
+
+  const handleNameSubmit = () => {
+    if (!nameInput.trim()) { setNameError('이름을 입력해주세요.'); return; }
+    const name = nameInput.trim();
     localStorage.setItem('kah_interviewer_name', name);
     setInterviewerName(name);
-    setLoginError('');
+    setNameError('');
     setView('cohortSelect');
   };
 
   const handleLogout = () => {
     localStorage.removeItem('kah_interviewer_name');
     setInterviewerName('');
+    setLoginId('');
+    setLoginPw('');
+    setNameInput('');
     setSelectedCohort(null);
     resetCurrentEvaluation();
     setCandidates([]);
@@ -1169,19 +1212,19 @@ export default function App() {
             <div style={{ width: '100%', maxWidth: 380, animation: 'fadeIn 0.4s ease' }}>
               <div style={{ marginBottom: 36 }}>
                 <h2 style={{ fontSize: 26, fontWeight: 900, color: '#111827', marginBottom: 8, letterSpacing: -0.3 }}>
-                  면접관 로그인
+                  로그인
                 </h2>
                 <p style={{ fontSize: 14, color: '#94a3b8', lineHeight: 1.5 }}>
-                  이름을 입력하고 평가 시스템에 접속하세요
+                  아이디와 비밀번호를 입력해주세요
                 </p>
               </div>
 
-              <div style={{ marginBottom: 20 }}>
+              <div style={{ marginBottom: 16 }}>
                 <label style={{
                   fontSize: 12, fontWeight: 700, color: '#374151',
                   display: 'block', marginBottom: 8, letterSpacing: 0.3,
                 }}>
-                  면접관 이름
+                  아이디
                 </label>
                 <input
                   style={{
@@ -1192,19 +1235,39 @@ export default function App() {
                     transition: 'border-color 0.15s, box-shadow 0.15s',
                     boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
                   }}
-                  placeholder="예: 홍길동"
-                  value={loginInput}
-                  onChange={e => { setLoginInput(e.target.value); setLoginError(''); }}
+                  placeholder="아이디 입력"
+                  value={loginId}
+                  onChange={e => { setLoginId(e.target.value); setLoginError(''); }}
                   onKeyDown={e => e.key === 'Enter' && handleLogin()}
-                  onFocus={e => {
-                    e.target.style.borderColor = '#dc2626';
-                    e.target.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.12)';
-                  }}
-                  onBlur={e => {
-                    if (!loginError) e.target.style.borderColor = '#e5e7eb';
-                    e.target.style.boxShadow = '0 1px 4px rgba(0,0,0,0.05)';
-                  }}
+                  onFocus={e => { e.target.style.borderColor = '#dc2626'; e.target.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.12)'; }}
+                  onBlur={e => { if (!loginError) e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = '0 1px 4px rgba(0,0,0,0.05)'; }}
                   autoFocus
+                />
+              </div>
+
+              <div style={{ marginBottom: 20 }}>
+                <label style={{
+                  fontSize: 12, fontWeight: 700, color: '#374151',
+                  display: 'block', marginBottom: 8, letterSpacing: 0.3,
+                }}>
+                  비밀번호
+                </label>
+                <input
+                  type="password"
+                  style={{
+                    width: '100%', padding: '14px 16px', borderRadius: 12,
+                    border: loginError ? '2px solid #dc2626' : '2px solid #e5e7eb',
+                    fontSize: 15, outline: 'none', color: '#111827',
+                    background: '#fff', boxSizing: 'border-box',
+                    transition: 'border-color 0.15s, box-shadow 0.15s',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
+                  }}
+                  placeholder="비밀번호 입력"
+                  value={loginPw}
+                  onChange={e => { setLoginPw(e.target.value); setLoginError(''); }}
+                  onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                  onFocus={e => { e.target.style.borderColor = '#dc2626'; e.target.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.12)'; }}
+                  onBlur={e => { if (!loginError) e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = '0 1px 4px rgba(0,0,0,0.05)'; }}
                 />
                 {loginError && (
                   <p style={{ fontSize: 12, color: '#dc2626', marginTop: 6, fontWeight: 600 }}>
@@ -1223,6 +1286,88 @@ export default function App() {
                   boxShadow: '0 4px 20px rgba(220,38,38,0.35)',
                   transition: 'all 0.15s',
                   letterSpacing: 0.3,
+                }}
+              >
+                로그인 →
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── 면접관 이름 입력 화면 ─────────────────────────────────────────── */}
+      {view === 'interviewerName' && (
+        <div style={{ minHeight: '100vh', display: 'flex', background: '#fff' }}>
+          <div style={{
+            width: '44%',
+            background: 'linear-gradient(160deg, #7f1d1d 0%, #dc2626 100%)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+            justifyContent: 'center', padding: '60px 48px',
+            position: 'relative', overflow: 'hidden',
+          }}>
+            <div style={{ position: 'absolute', top: -100, right: -100, width: 360, height: 360, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' }} />
+            <div style={{ position: 'absolute', bottom: -80, left: -80, width: 280, height: 280, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' }} />
+            <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', animation: 'fadeIn 0.5s ease' }}>
+              <div style={{
+                width: 80, height: 80, borderRadius: 22,
+                background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(10px)',
+                border: '1.5px solid rgba(255,255,255,0.25)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                margin: '0 auto 28px', boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+              }}>
+                <span style={{ color: '#fff', fontWeight: 900, fontSize: 24, fontFamily: "'Georgia', serif" }}>KAH</span>
+              </div>
+              <h1 style={{ color: '#fff', fontSize: 30, fontWeight: 900, marginBottom: 10, letterSpacing: -0.5 }}>KAH Interview</h1>
+              <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, letterSpacing: 1.5, textTransform: 'uppercase' }}>Evaluation System</p>
+            </div>
+          </div>
+
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px', background: '#fafafa' }}>
+            <div style={{ width: '100%', maxWidth: 380, animation: 'fadeIn 0.4s ease' }}>
+              <div style={{ marginBottom: 36 }}>
+                <h2 style={{ fontSize: 26, fontWeight: 900, color: '#111827', marginBottom: 8, letterSpacing: -0.3 }}>
+                  면접관 이름 입력
+                </h2>
+                <p style={{ fontSize: 14, color: '#94a3b8', lineHeight: 1.5 }}>
+                  평가 기록에 사용될 이름을 입력하세요
+                </p>
+              </div>
+
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 8, letterSpacing: 0.3 }}>
+                  면접관 이름
+                </label>
+                <input
+                  style={{
+                    width: '100%', padding: '14px 16px', borderRadius: 12,
+                    border: nameError ? '2px solid #dc2626' : '2px solid #e5e7eb',
+                    fontSize: 15, outline: 'none', color: '#111827',
+                    background: '#fff', boxSizing: 'border-box',
+                    transition: 'border-color 0.15s, box-shadow 0.15s',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
+                  }}
+                  placeholder="예: 홍길동"
+                  value={nameInput}
+                  onChange={e => { setNameInput(e.target.value); setNameError(''); }}
+                  onKeyDown={e => e.key === 'Enter' && handleNameSubmit()}
+                  onFocus={e => { e.target.style.borderColor = '#dc2626'; e.target.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.12)'; }}
+                  onBlur={e => { if (!nameError) e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = '0 1px 4px rgba(0,0,0,0.05)'; }}
+                  autoFocus
+                />
+                {nameError && (
+                  <p style={{ fontSize: 12, color: '#dc2626', marginTop: 6, fontWeight: 600 }}>⚠ {nameError}</p>
+                )}
+              </div>
+
+              <button
+                className="login-btn"
+                onClick={handleNameSubmit}
+                style={{
+                  width: '100%', padding: '14px', borderRadius: 12, border: 'none',
+                  background: 'linear-gradient(135deg, #7f1d1d 0%, #dc2626 100%)',
+                  color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer',
+                  boxShadow: '0 4px 20px rgba(220,38,38,0.35)',
+                  transition: 'all 0.15s', letterSpacing: 0.3,
                 }}
               >
                 입장하기 →
@@ -1428,6 +1573,17 @@ export default function App() {
                 }}>
                   {Math.round((c.avg_score / maxTotal) * 100)}%
                 </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteCandidate(c); }}
+                  title="지원자 삭제"
+                  style={{
+                    marginLeft: 6, border: "none", background: "transparent",
+                    color: "#94a3b8", fontSize: 14, cursor: "pointer", padding: "2px 4px",
+                    lineHeight: 1, borderRadius: 4,
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.color = '#dc2626'}
+                  onMouseLeave={e => e.currentTarget.style.color = '#94a3b8'}
+                >✕</button>
               </div>
               {c.evaluation_count > 0 && (
                 <button
