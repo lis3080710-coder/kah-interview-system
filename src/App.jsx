@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from "recharts";
+import * as XLSX from "xlsx";
 
 // ─── Supabase Client (Inline) ────────────────────────────────────────────────
 const SUPABASE_URL = "https://kldmiyyjjlsysjevmblz.supabase.co";
@@ -49,7 +50,9 @@ const createSupabaseClient = (url, key) => {
             headers,
             body: JSON.stringify(data)
           });
-          return { data: await res.json(), error: res.ok ? null : new Error('Failed to update') };
+          const text = await res.text();
+          const json = text ? JSON.parse(text) : null;
+          return { data: json, error: res.ok ? null : new Error('Failed to update') };
         }
       })
     }),
@@ -301,16 +304,237 @@ const S = {
   },
 };
 
-// ─── Fake PDF Parser ──────────────────────────────────────────────────────────
-function fakeParsePDF(filename) {
-  return {
-    name: "홍길동", dob: "2002-05-14", available12: "가능",
-    phone: "010-1234-5678", email: "hong@kah.ac.kr",
-    studentId: "20220001", address: "서울특별시 강남구 역삼동",
-    major: "컴퓨터공학과", grade: "3학년 1학기",
-    career: "교내 개발 동아리 2년, 외부 해커톤 입상 경험",
-    schedule: "2월 17일 14:00",
+// ─── Excel Parser ─────────────────────────────────────────────────────────────
+function cellStr(v) { return String(v ?? '').trim(); }
+
+const EMPTY_CAREERS = () => [
+  { type: '', content: '', period: '', org: '' },
+  { type: '', content: '', period: '', org: '' },
+  { type: '', content: '', period: '', org: '' },
+  { type: '', content: '', period: '', org: '' },
+];
+
+// KAH 폼 형식 파싱 (레이블-값 쌍 구조)
+function parseKAHForm(rows, selfIntroRows) {
+  const info = {};
+
+  // ── 1) 인적사항: 각 행에서 레이블-값 쌍 스캔 ──────────────────────────
+  const PERSONAL_MAP = {
+    '이름(한글)': 'name', '이름': 'name', '성명': 'name',
+    '생년월일': 'dob',
+    '학번': 'studentId',
+    '12개월 참여 가능': 'available12', '12개월참여가능': 'available12',
+    '휴대전화': 'phone', '전화번호': 'phone',
+    'E-mail': 'email', 'e-mail': 'email', '이메일': 'email',
+    '주소': 'address',
+    '전공': 'major', '학과': 'major',
+    '학년-학기': 'grade',
+    '작성일': 'writtenDate',
   };
+  for (const row of rows) {
+    for (let i = 0; i < row.length - 1; i++) {
+      const label = cellStr(row[i]);
+      if (!label) continue;
+      const field = PERSONAL_MAP[label];
+      if (field && !info[field]) {
+        for (let j = i + 1; j < row.length; j++) {
+          const val = cellStr(row[j]);
+          if (val) { info[field] = val; break; }
+        }
+      }
+    }
+  }
+
+  // ── 2) 관심분야 ───────────────────────────────────────────────────────
+  for (let ri = 0; ri < rows.length; ri++) {
+    const row = rows[ri];
+    if (row.some(c => cellStr(c) === '관심 직무')) {
+      const hdr = row;
+      const dat = rows[ri + 1] || [];
+      hdr.forEach((h, ci) => {
+        const hs = cellStr(h); const ds = cellStr(dat[ci]);
+        if (hs === '1지망') info.jobPref1 = ds;
+        if (hs === '2지망') info.jobPref2 = ds;
+        if (hs === '3지망') info.jobPref3 = ds;
+        if (hs === 'HRM') info.hrmRank = ds;
+        if (hs === 'HRD') info.hrdRank = ds;
+        if (hs === '노사') info.laborRank = ds;
+      });
+      break;
+    }
+  }
+
+  // ── 3) 경력 및 활동사항 (4칸 테이블) ────────────────────────────────
+  let inCareer = false;
+  let careerColMap = {};
+  const careers = [];
+  for (let ri = 0; ri < rows.length; ri++) {
+    const row = rows[ri];
+    const rt = row.map(cellStr).join('');
+    if (rt.includes('경력 및 활동사항') || rt.includes('경력및활동사항')) { inCareer = true; continue; }
+    if (inCareer && row.some(c => cellStr(c) === '구분')) {
+      careerColMap = {};
+      row.forEach((c, ci) => {
+        const v = cellStr(c);
+        if (v === '구분') careerColMap[ci] = 'type';
+        if (v === '활동 내용' || v === '활동내용') careerColMap[ci] = 'content';
+        if (v === '활동 기간' || v === '활동기간') careerColMap[ci] = 'period';
+        if (v === '기관 및 단체명' || v === '기관및단체명') careerColMap[ci] = 'org';
+      });
+      continue;
+    }
+    if (inCareer && Object.keys(careerColMap).length > 0) {
+      if (/^\d+\.\s/.test(cellStr(row[0]))) { inCareer = false; continue; }
+      const entry = { type: '', content: '', period: '', org: '' };
+      Object.entries(careerColMap).forEach(([ci, field]) => {
+        const val = cellStr(row[ci]);
+        if (val) entry[field] = val;
+      });
+      if (Object.values(entry).some(v => v)) careers.push(entry);
+    }
+  }
+  while (careers.length < 4) careers.push({ type: '', content: '', period: '', org: '' });
+  info.careers = careers.slice(0, 4);
+
+  // ── 4) KAH를 알게 된 경로 ────────────────────────────────────────────
+  let inHowFound = false;
+  let howFoundOptions = [];
+  for (let ri = 0; ri < rows.length; ri++) {
+    const row = rows[ri];
+    const rt = row.map(cellStr).join('');
+    if (rt.includes('알게 된 경로') || rt.includes('알게된경로')) { inHowFound = true; continue; }
+    if (inHowFound && howFoundOptions.length === 0 && row.some(c => cellStr(c))) {
+      howFoundOptions = row.map(cellStr); continue;
+    }
+    if (inHowFound && howFoundOptions.length > 0) {
+      const selected = [];
+      row.forEach((cell, ci) => {
+        if (cellStr(cell) === '○' || cellStr(cell) === 'O') {
+          if (howFoundOptions[ci]) selected.push(howFoundOptions[ci]);
+        }
+      });
+      if (selected.length > 0) info.howFound = selected.join(', ');
+      inHowFound = false;
+    }
+  }
+
+  // ── 5) 선호하는 팀 ───────────────────────────────────────────────────
+  let inTeam = false;
+  let teamOptions = [];
+  for (let ri = 0; ri < rows.length; ri++) {
+    const row = rows[ri];
+    const rt = row.map(cellStr).join('');
+    if (rt.includes('선호하는 팀') || rt.includes('선호하는팀')) { inTeam = true; continue; }
+    if (inTeam && teamOptions.length === 0 && row.some(c => cellStr(c).includes('팀'))) {
+      teamOptions = row.map((c, ci) => ({ ci, name: cellStr(c) })).filter(x => x.name.includes('팀'));
+      continue;
+    }
+    if (inTeam && teamOptions.length > 0) {
+      for (let lookAhead = 0; lookAhead <= 3 && ri + lookAhead < rows.length; lookAhead++) {
+        const r = rows[ri + lookAhead];
+        for (const opt of teamOptions) {
+          const v = cellStr(r[opt.ci]);
+          if (v.includes('○') || v === 'O') { info.preferredTeam = opt.name; break; }
+        }
+        if (info.preferredTeam) break;
+      }
+      inTeam = false;
+    }
+  }
+
+  // ── 6) 면접 일정 ─────────────────────────────────────────────────────
+  let inSchedule = false;
+  let timeHeaders = [];
+  const scheduleParts = [];
+  for (const row of rows) {
+    const rt = row.map(cellStr).join('');
+    if (rt.includes('면접 일정') || rt.includes('면접일정')) { inSchedule = true; continue; }
+    if (inSchedule) {
+      if (cellStr(row[0]) === '날짜') { timeHeaders = row.map(cellStr); continue; }
+      const date = cellStr(row[0]);
+      if (date && /\d/.test(date) && timeHeaders.length > 0) {
+        for (let ci = 1; ci < row.length && ci < timeHeaders.length; ci++) {
+          const mark = cellStr(row[ci]);
+          if (mark === '○' || mark === 'O' || mark === 'o' || mark === '●') {
+            scheduleParts.push(`${date} ${timeHeaders[ci]}`);
+          }
+        }
+      }
+    }
+  }
+  if (scheduleParts.length > 0) info.schedule = scheduleParts.join(', ');
+
+  // ── 7) 자기소개서 (Sheet 2) ──────────────────────────────────────────
+  const selfIntro = [];
+  if (selfIntroRows) {
+    for (let ri = 0; ri < selfIntroRows.length; ri++) {
+      const row = selfIntroRows[ri];
+      if (cellStr(row[0]) === '질문') {
+        const question = cellStr(row[1]);
+        const answerRow = selfIntroRows[ri + 1] || [];
+        const answer = cellStr(answerRow[1]);
+        if (question) { selfIntro.push({ question, answer }); ri++; }
+      }
+    }
+  }
+  info.selfIntro = selfIntro;
+
+  return info.name ? [info] : [];
+}
+
+async function parseExcelFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet1 = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet1, { header: 1, defval: '' });
+
+        // Sheet 2 (자기소개서) 읽기
+        let selfIntroRows = null;
+        if (workbook.SheetNames.length > 1) {
+          const sheet2 = workbook.Sheets[workbook.SheetNames[1]];
+          selfIntroRows = XLSX.utils.sheet_to_json(sheet2, { header: 1, defval: '' });
+        }
+
+        // 첫 행이 헤더 테이블인지 판별
+        const firstRowText = (rows[0] || []).map(cellStr).join('');
+        const isTable = ['이름', '성명', 'name'].some(k => firstRowText.includes(k))
+          && rows.length > 1 && cellStr(rows[1]?.[0]) !== '';
+
+        const result = isTable
+          ? rows.slice(1).map(row => {
+              const info = {};
+              ['이름','생년월일','학번','12개월참여','휴대전화','이메일','주소','전공','학년-학기','면접일정'].forEach((label, li) => {
+                const idx = (rows[0] || []).findIndex(h => cellStr(h) === label);
+                if (idx >= 0 && cellStr(row[idx])) info[['name','dob','studentId','available12','phone','email','address','major','grade','schedule'][li]] = cellStr(row[idx]);
+              });
+              info.careers = EMPTY_CAREERS();
+              info.selfIntro = [];
+              return info;
+            }).filter(i => i.name)
+          : parseKAHForm(rows, selfIntroRows);
+
+        resolve(result);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function downloadExcelTemplate() {
+  const headers = ['이름(한글)', '생년월일', '학번', '12개월참여', '휴대전화', 'E-mail', '주소', '전공', '학년-학기', '작성일'];
+  const example = ['홍길동', '2002-05-14', '20220001', '가능', '010-1234-5678', 'hong@kah.ac.kr', '서울시 강남구', '경영학과', '3학년 1학기', '2025년 03월 05일'];
+  const ws = XLSX.utils.aoa_to_sheet([headers, example]);
+  ws['!cols'] = headers.map(() => ({ wch: 18 }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '지원서');
+  XLSX.writeFile(wb, 'KAH_지원서_양식.xlsx');
 }
 
 // ─── ScoreInput Component ─────────────────────────────────────────────────────
@@ -979,19 +1203,37 @@ export default function App() {
     }
   };
 
-  const handleDrop = useCallback((e) => {
+  const handleDrop = useCallback(async (e) => {
     e.preventDefault();
     setDragging(false);
     const file = e.dataTransfer?.files?.[0] || e.target.files?.[0];
     if (!file) return;
 
-    setParseMsg("📄 PDF 파싱 중...");
-    setTimeout(async () => {
-      const parsed = fakeParsePDF(file.name);
-      setParseMsg("✅ 정보가 자동으로 입력되었습니다.");
-      await createCandidate(parsed);
-    }, 1200);
-  }, [interviewerId]);
+    if (!/\.(xlsx|xls)$/i.test(file.name)) {
+      setParseMsg("⚠️ Excel 파일(.xlsx, .xls)만 지원합니다.");
+      return;
+    }
+
+    setParseMsg("📊 Excel 파일 분석 중...");
+    try {
+      const parsed = await parseExcelFile(file);
+      if (parsed.length === 0) {
+        setParseMsg("⚠️ 인식된 지원자가 없습니다. 헤더 행과 데이터를 확인해주세요.");
+        return;
+      }
+      setParseMsg(`⏳ ${parsed.length}명 등록 중...`);
+      let count = 0;
+      for (const info of parsed) {
+        const result = await createCandidate(info);
+        if (result) count++;
+      }
+      setParseMsg(`✅ ${count}명의 지원자가 자동으로 등록되었습니다.`);
+    } catch (err) {
+      console.error(err);
+      setParseMsg("❌ 파일 읽기 실패. 올바른 Excel 파일인지 확인해주세요.");
+    }
+    if (fileRef.current) fileRef.current.value = '';
+  }, [interviewerId, selectedCohort]);
 
   const newCandidate = () => {
     resetCurrentEvaluation();
@@ -1001,8 +1243,14 @@ export default function App() {
       name: '',
       info: {
         dob: '', available12: '', phone: '', email: '',
-        studentId: '', address: '', major: '', grade: '',
-        career: '', schedule: '', cohort: selectedCohort
+        studentId: '', address: '', major: '', grade: '', writtenDate: '',
+        jobPref1: '', jobPref2: '', jobPref3: '',
+        hrmRank: '', hrdRank: '', laborRank: '',
+        careers: EMPTY_CAREERS(),
+        howFound: '', preferredTeam: '',
+        schedule: '',
+        selfIntro: [],
+        cohort: selectedCohort
       },
       evaluations: [],
       avg_score: 0,
@@ -1033,6 +1281,13 @@ export default function App() {
         console.error('Error updating candidate:', error);
       }
     }
+  };
+
+  const updateCareerInfo = async (rowIdx, field, value) => {
+    if (!currentCandidate) return;
+    const careers = [...(currentCandidate.info?.careers || EMPTY_CAREERS())];
+    careers[rowIdx] = { ...careers[rowIdx], [field]: value };
+    await updateCandidateInfo('careers', careers);
   };
 
   const inputField = (label, field, span = false) => {
@@ -1614,7 +1869,16 @@ export default function App() {
         <main style={S.main}>
           {!currentCandidate && (
             <div style={S.card}>
-              <div style={S.sectionTitle}>📎 지원서 업로드 (PDF)</div>
+              <div style={{ ...S.sectionTitle, justifyContent: "space-between" }}>
+                <span>📎 지원서 Excel 업로드</span>
+                <button
+                  onClick={downloadExcelTemplate}
+                  style={S.smallBtn}
+                  title="양식 다운로드"
+                >
+                  ⬇ 양식 다운로드
+                </button>
+              </div>
               <div
                 style={S.dropZone(dragging)}
                 onClick={() => fileRef.current?.click()}
@@ -1622,18 +1886,20 @@ export default function App() {
                 onDragLeave={() => setDragging(false)}
                 onDrop={handleDrop}
               >
-                <div style={{ fontSize: 28, marginBottom: 8 }}>📄</div>
+                <div style={{ fontSize: 28, marginBottom: 8 }}>📊</div>
                 <div style={{ fontSize: 13, color: "#64748b", fontWeight: 600 }}>
-                  PDF 파일을 드래그하거나 클릭하여 업로드하세요
+                  Excel 파일(.xlsx, .xls)을 드래그하거나 클릭하여 업로드하세요
                 </div>
-                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>지원서의 정보가 자동으로 입력됩니다</div>
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
+                  지원서의 정보가 자동으로 입력됩니다 · 여러 명을 한 번에 등록할 수 있습니다
+                </div>
               </div>
-              <input ref={fileRef} type="file" accept=".pdf" style={{ display: "none" }} onChange={handleDrop} />
+              <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleDrop} />
               {parseMsg && (
                 <div style={{
                   marginTop: 10, fontSize: 12,
-                  color: parseMsg.startsWith("✅") ? "#166534" : "#64748b",
-                  background: parseMsg.startsWith("✅") ? "#dcfce7" : "#f8fafc",
+                  color: parseMsg.startsWith("✅") ? "#166534" : parseMsg.startsWith("❌") || parseMsg.startsWith("⚠️") ? "#991b1b" : "#64748b",
+                  background: parseMsg.startsWith("✅") ? "#dcfce7" : parseMsg.startsWith("❌") || parseMsg.startsWith("⚠️") ? "#fee2e2" : "#f8fafc",
                   padding: "8px 12px", borderRadius: 8, fontWeight: 600,
                 }}>
                   {parseMsg}
@@ -1646,37 +1912,128 @@ export default function App() {
             <>
               {/* ─── 지원자 정보 카드 ─────────────────────────────────────── */}
               <div style={S.card}>
-                <div style={S.sectionTitle}>👤 지원자 정보</div>
+                {/* 1. 인적사항 */}
+                <div style={S.sectionTitle}>👤 1. 인적사항</div>
                 <div style={S.inputRow}>
-                  {inputField("이름", "name")}
+                  {inputField("이름(한글)", "name")}
                   {inputField("생년월일", "dob")}
-                  {inputField("12개월 참여", "available12")}
-                  {inputField("휴대전화", "phone")}
+                  {inputField("학번", "studentId")}
+                  {inputField("12개월 참여 가능", "available12")}
                 </div>
                 <div style={S.inputRow}>
-                  {inputField("이메일", "email")}
-                  {inputField("학번", "studentId")}
+                  {inputField("휴대전화", "phone")}
+                  {inputField("E-mail", "email")}
+                  {inputField("주소", "address")}
+                </div>
+                <div style={S.inputRow}>
                   {inputField("전공", "major")}
                   {inputField("학년-학기", "grade")}
+                  {inputField("작성일", "writtenDate")}
                 </div>
-                <div style={S.inputRow}>
-                  {inputField("주소", "address", true)}
-                </div>
-                <div style={S.inputRow}>
-                  <div style={{ ...S.inputGroup, flex: "0 0 100%", minWidth: "100%" }}>
-                    <label style={S.label}>경력 및 활동사항</label>
-                    <textarea
-                      rows={2}
-                      value={currentCandidate?.info?.career || ""}
-                      onChange={e => updateCandidateInfo("career", e.target.value)}
-                      style={{ ...S.input, resize: "vertical", minHeight: 52, lineHeight: 1.5 }}
-                      placeholder="경력 및 활동사항을 입력하세요"
-                    />
+
+                {/* 2. 관심분야 */}
+                <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 12, paddingTop: 16 }}>
+                  <div style={S.sectionTitle}>🎯 2. 관심분야</div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#7f1d1d", marginBottom: 6 }}>관심 직무</div>
+                  <div style={S.inputRow}>
+                    {inputField("1지망", "jobPref1")}
+                    {inputField("2지망", "jobPref2")}
+                    {inputField("3지망", "jobPref3")}
+                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#7f1d1d", marginBottom: 6 }}>관심 인사 분야 순위</div>
+                  <div style={S.inputRow}>
+                    {inputField("HRM 순위", "hrmRank")}
+                    {inputField("HRD 순위", "hrdRank")}
+                    {inputField("노사 순위", "laborRank")}
                   </div>
                 </div>
-                <div style={S.inputRow}>
-                  {inputField("면접 일정", "schedule")}
+
+                {/* 3. 경력 및 활동사항 */}
+                <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 12, paddingTop: 16 }}>
+                  <div style={S.sectionTitle}>📋 3. 경력 및 활동사항</div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: "#f8fafc" }}>
+                          {["구분", "활동 내용", "활동 기간", "기관 및 단체명"].map(h => (
+                            <th key={h} style={{
+                              padding: "8px 10px", border: "1px solid #e2e8f0",
+                              fontWeight: 700, color: "#7f1d1d", textAlign: "left",
+                              whiteSpace: "nowrap",
+                            }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(currentCandidate?.info?.careers || EMPTY_CAREERS())
+                          .filter(row => Object.values(row).some(v => v))
+                          .map((row, ri) => (
+                          <tr key={ri}>
+                            {[
+                              { field: "type", width: "16%" },
+                              { field: "content", width: "40%" },
+                              { field: "period", width: "22%" },
+                              { field: "org", width: "22%" },
+                            ].map(({ field, width }) => (
+                              <td key={field} style={{ border: "1px solid #e2e8f0", padding: 4, width }}>
+                                <input
+                                  style={{ ...S.input, border: "none", background: "transparent", padding: "4px 6px" }}
+                                  value={row[field] || ""}
+                                  onChange={e => updateCareerInfo(ri, field, e.target.value)}
+                                  disabled={!currentCandidate}
+                                  onFocus={e => e.target.style.background = "#fff9f9"}
+                                  onBlur={e => e.target.style.background = "transparent"}
+                                />
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
+
+                {/* 4. KAH를 알게 된 경로 + 선호하는 팀 */}
+                <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 12, paddingTop: 16 }}>
+                  <div style={S.sectionTitle}>🔍 4. 기타 정보</div>
+                  <div style={S.inputRow}>
+                    {inputField("KAH를 알게 된 경로", "howFound")}
+                    {inputField("선호하는 팀", "preferredTeam")}
+                  </div>
+                </div>
+
+                {/* 5. 면접 일정 */}
+                <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 12, paddingTop: 16 }}>
+                  <div style={S.sectionTitle}>📅 5. 면접 일정</div>
+                  <div style={S.inputRow}>
+                    {inputField("가능한 일정", "schedule", true)}
+                  </div>
+                </div>
+
+                {/* 6. 자기소개서 */}
+                {(currentCandidate?.info?.selfIntro?.length > 0) && (
+                  <div style={{ borderTop: "1px solid #f1f5f9", marginTop: 12, paddingTop: 16 }}>
+                    <div style={S.sectionTitle}>✍ 6. 자기소개서</div>
+                    {currentCandidate.info.selfIntro.map((qa, qi) => (
+                      <div key={qi} style={{ marginBottom: 16 }}>
+                        <div style={{
+                          fontSize: 12, fontWeight: 700, color: "#7f1d1d",
+                          marginBottom: 6, lineHeight: 1.4,
+                        }}>
+                          {qa.question}
+                        </div>
+                        <div style={{
+                          background: "#f8fafc", border: "1px solid #e2e8f0",
+                          borderRadius: 8, padding: "10px 12px",
+                          fontSize: 12, color: "#334155", lineHeight: 1.7,
+                          whiteSpace: "pre-wrap", maxHeight: 160, overflowY: "auto",
+                        }}>
+                          {qa.answer || <span style={{ color: "#94a3b8" }}>작성된 내용 없음</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {/* ─── 돌발 질문 토글 섹션 ──────────────────────────────── */}
                 <div style={{ marginTop: 8, borderTop: "1px solid #f1f5f9", paddingTop: 14 }}>
